@@ -1,0 +1,11 @@
+# SwiftPM build artifacts
+.build/
+
+# macOS
+.DS_Store
+
+# Xcode per-user state (opening Package.swift in Xcode)
+xcuserdata/
+*.xcuserstate
+*.xcresult
+.swiftpm/xcode/xcuserdata/
