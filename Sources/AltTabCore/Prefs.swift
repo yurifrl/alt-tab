@@ -2,7 +2,7 @@ import AppKit
 import Carbon.HIToolbox
 
 /// Preferences, namespaced `at.*`. Mirrors the Contexts option surface
-/// (Command-Tab, Panel, Search, Number Switcher, Rules, Sidebar panes).
+/// (Command-Tab, Panel, Search, Number Switcher, Rules panes).
 /// Everything persisted; consumers read live on each use.
 enum PrefsStore {
     enum Theme: String, CaseIterable { case auto, vibrantLight, vibrantDark }
@@ -37,12 +37,9 @@ enum PrefsStore {
         static let numberRightCmd = "at.number.rightCmd"
         static let numberLeftOpt = "at.number.leftOpt"
         static let numberRightOpt = "at.number.rightOpt"
-        static let numberSidebar = "at.number.showOnSidebar"
         static let workspaceExcludes = "at.workspaces.appExcludes"   // [String] bundle ids
         static let workspaceTitleExcludes = "at.workspaces.titleExcludes" // [String] "bundle|pattern"
-        static let sidebarsEnabled = "at.sidebars.enabled"
-        static let sidebarsWindowless = "at.sidebars.windowlessApps"
-        static let sidebarsNumbers = "at.sidebars.numbers"
+        static let showWindowlessApps = "at.rules.showWindowlessApps"    // Bool
         static let panelDisplay = "at.panel.showOn"
         static let panelWidth = "at.panel.width"
         static let panelDelay = "at.panel.showAfterDelay"
@@ -244,11 +241,6 @@ enum PrefsStore {
         on ? mask | bit : mask & ~bit
     }
 
-    static var numberShowOnSidebar: Bool {
-        get { d.bool(forKey: Key.numberSidebar) }
-        set { d.set(newValue, forKey: Key.numberSidebar) }
-    }
-
     // MARK: Panel policies
 
     static var spaceScope: SpaceScope {
@@ -271,8 +263,24 @@ enum PrefsStore {
         set { d.set(newValue.rawValue, forKey: Key.hiddenPolicy) }
     }
 
+    /// Apps without AX windows ("windowless apps"). Three-state like
+    /// minimized/hidden; one-shot migration from the legacy bool and the
+    /// older string popup ("Show"/"Show at bottom" preserved).
     static var windowlessPolicy: WindowPolicy {
-        get { WindowPolicy(rawValue: d.string(forKey: Key.windowlessPolicy) ?? "") ?? .doNotShow }
+        get {
+            if let raw = d.string(forKey: Key.windowlessPolicy),
+               let p = WindowPolicy(rawValue: raw) {
+                d.removeObject(forKey: Key.showWindowlessApps) // legacy bool no longer read
+                return p
+            }
+            if let v = d.object(forKey: Key.showWindowlessApps) as? Bool {
+                let p: WindowPolicy = v ? .show : .doNotShow
+                d.set(p.rawValue, forKey: Key.windowlessPolicy)
+                d.removeObject(forKey: Key.showWindowlessApps)
+                return p
+            }
+            return .doNotShow
+        }
         set { d.set(newValue.rawValue, forKey: Key.windowlessPolicy) }
     }
 
@@ -294,7 +302,7 @@ enum PrefsStore {
         set { d.set(newValue, forKey: Key.groupCount) }
     }
 
-    /// Apps never shown anywhere (switcher + sidebar).
+    /// Apps never shown in the switcher.
     static var workspaceExcludes: [String] {
         get { d.stringArray(forKey: Key.workspaceExcludes) ?? [] }
         set { d.set(newValue, forKey: Key.workspaceExcludes) }
@@ -308,8 +316,13 @@ enum PrefsStore {
     }
 
     /// True when the window must not appear per the exclude rules.
-    static func isExcluded(bundleId: String, title: String) -> Bool {
-        if workspaceExcludes.contains(bundleId) { return true }
+    /// Bundle-only rules: exact bundle id, or case-insensitive substring of the
+    /// app's local name (preserves the legacy loose app-name matching).
+    static func isExcluded(bundleId: String, appLocalName: String, title: String) -> Bool {
+        for entry in workspaceExcludes {
+            if entry == bundleId { return true }
+            if appLocalName.localizedCaseInsensitiveContains(entry) { return true }
+        }
         for entry in titleExcludes where entry.hasPrefix(bundleId + "|") {
             let pattern = String(entry.dropFirst(bundleId.count + 1))
             if titleMatches(title, pattern) { return true }
@@ -324,23 +337,6 @@ enum PrefsStore {
         if pattern.hasPrefix("^") { return title.hasPrefix(String(pattern.dropFirst())) }
         if pattern.hasSuffix("$") && !pattern.hasPrefix("^") { return title.hasSuffix(String(pattern.dropLast())) }
         return title.localizedCaseInsensitiveContains(pattern)
-    }
-
-    // MARK: Sidebars
-
-    static var sidebarsEnabled: Bool {
-        get { d.bool(forKey: Key.sidebarsEnabled) }
-        set { d.set(newValue, forKey: Key.sidebarsEnabled) }
-    }
-
-    static var sidebarsWindowless: Bool {
-        get { d.bool(forKey: Key.sidebarsWindowless) }
-        set { d.set(newValue, forKey: Key.sidebarsWindowless) }
-    }
-
-    static var sidebarsNumbers: Bool {
-        get { d.bool(forKey: Key.sidebarsNumbers) }
-        set { d.set(newValue, forKey: Key.sidebarsNumbers) }
     }
 
     // MARK: In-panel action keys (Panel pane: Close/Quit/Minimize/Hide rows)

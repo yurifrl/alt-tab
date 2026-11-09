@@ -178,11 +178,18 @@ final class HotkeyCenter {
                           handler: { _ in handler() })])
     }
 
+    /// While the prefs window records a combo, dispatch passes every keyDown
+    /// through untouched: the recorder's local monitor needs the event, and a
+    /// recorded combo matching a live trigger would otherwise be consumed (or
+    /// open the panel) before it ever reached the recorder.
+    var suspended = false
+
     private func dispatch(_ event: CGEvent) -> Unmanaged<CGEvent>? {
         defer { poke() }
         if TapLog.on {
             TapLog.log("dispatch kc=\(event.getIntegerValueField(.keyboardEventKeycode)) flags=0x\(String(event.flags.rawValue, radix: 16))")
         }
+        if suspended { return Unmanaged.passUnretained(event) }
         if interceptor?(event) == true {
             if TapLog.on { TapLog.log("dispatch → interceptor consumed") }
             return nil

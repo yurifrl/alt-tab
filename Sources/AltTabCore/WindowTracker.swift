@@ -56,7 +56,8 @@ final class WindowTracker {
             name: NSWorkspace.didLaunchApplicationNotification, object: nil)
 
         refresh(reason: "start")
-        for app in ws.runningApplications where app.activationPolicy == .regular {
+        for app in ws.runningApplications
+        where app.activationPolicy == .regular || app.activationPolicy == .accessory {
             attachObserver(to: app)
         }
     }
@@ -78,7 +79,7 @@ final class WindowTracker {
 
     @objc private func appLaunched(_ note: Notification) {
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-              app.activationPolicy == .regular else { return }
+              app.activationPolicy == .regular || app.activationPolicy == .accessory else { return }
         attachObserver(to: app)
         log("ws:launched pid=\(app.processIdentifier) \(app.localizedName ?? "?")")
         refresh(reason: "launch")
@@ -148,28 +149,28 @@ final class WindowTracker {
             // Contexts filters, applied at model build time. Panel policies drive
             // the shared model; the switcher/session slices further by scope.
             if PrefsStore.hiddenPolicy == .doNotShow { rows.removeAll { $0.appHidden } }
+            // Windowless apps: Do not show filters them; Show at bottom sinks
+            // them below every windowed row (Contexts "Apps without windows").
             if PrefsStore.windowlessPolicy == .doNotShow { rows.removeAll { $0.windowless } }
             // Minimized windows: Do not show filters them; Show at bottom sinks
             // them below every visible row (Contexts "Minimized windows").
-            switch PrefsStore.minimizedPolicy {
-            case .doNotShow:
-                rows.removeAll { $0.minimized }
-            case .showAtBottom:
-                rows.sort { ($0.minimized ? 1 : 0) < ($1.minimized ? 1 : 0) }
-            case .show:
-                break
+            if PrefsStore.minimizedPolicy == .doNotShow { rows.removeAll { $0.minimized } }
+            if PrefsStore.minimizedPolicy == .showAtBottom || PrefsStore.windowlessPolicy == .showAtBottom {
+                // One stable sink pass: minimized first, then windowless
+                // (windowless rows are never minimized, so the keys don't fight).
+                func sinkKey(_ w: WindowModel) -> (Int, Int) {
+                    (PrefsStore.minimizedPolicy == .showAtBottom && w.minimized ? 1 : 0,
+                     PrefsStore.windowlessPolicy == .showAtBottom && w.windowless ? 1 : 0)
+                }
+                rows.sort { sinkKey($0) < sinkKey($1) }
             }
             if PrefsStore.spaceScope != .allSpaces {
                 rows.removeAll { !$0.minimized && offscreenWindowKeys.contains(WindowKey(pid: $0.pid, title: $0.title, frame: $0.frame)) }
             }
-            let excludes = PrefsStore.workspaceExcludes
-            if !excludes.isEmpty {
-                rows.removeAll { w in
-                    excludes.contains { ex in
-                        w.bundleId.lowercased().contains(ex.lowercased())
-                        || w.appLocalName.lowercased().contains(ex.lowercased())
-                    }
-                }
+            // Rules excludes: one matcher, owned by the store (bundle rules +
+            // per-app title patterns), applied to the whole model.
+            rows.removeAll { w in
+                PrefsStore.isExcluded(bundleId: w.bundleId, appLocalName: w.appLocalName, title: w.title)
             }
             DispatchQueue.main.async { [weak self] in
                 guard let self, gen == self.refreshGen else { return } // superseded sweep

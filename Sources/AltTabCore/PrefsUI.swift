@@ -3,18 +3,30 @@ import Carbon.HIToolbox
 
 /// Preferences window (Phase 5 + Contexts parity panes): one tab per Contexts
 /// settings pane. Every control writes PrefsStore directly and applies live —
-/// theme re-skins open surfaces, sidebars toggle, hotkeys rebind instantly.
-final class PrefsWindowController: NSWindowController, NSWindowDelegate {
+/// theme re-skins open surfaces, hotkeys rebind instantly.
+final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTableViewDelegate, NSTableViewDataSource, NSTextFieldDelegate {
     static let shared = PrefsWindowController()
 
-    // Command-Tab pane — Contexts-style shortcut list (the four fixed combos).
-    private struct ShortcutRow {
-        let check: NSButton        // enables the trigger
-        let upLabel: NSTextField   // current move-up binding
-        let upButton: NSButton     // records move-up
-    }
-    private var shortcutRows: [ShortcutRow] = []
-    private var recordingUp: Int?
+    // Command-Tab pane — Contexts-style shortcut list: an "Or"/"Shortcut"
+    // table on the left, the selected row's activate/move-up chips to its
+    // right, +/− for custom triggers below.
+    private enum RecordingKind { case moveUp, trigger }
+    private let shortcutTable = NSTableView()
+    private let shortcutScroll = NSScrollView()
+    private let activateChip = NSButton(title: "—", target: nil, action: nil)
+    private let activateClear = NSButton(title: "✕", target: nil, action: nil)
+    private let moveUpChip = NSButton(title: "—", target: nil, action: nil)
+    private let moveUpClear = NSButton(title: "✕", target: nil, action: nil)
+    private let plusShortcut = NSButton(title: "+", target: nil, action: nil)
+    private let minusShortcut = NSButton(title: "−", target: nil, action: nil)
+    private let moveDownHint = NSTextField(wrappingLabelWithString: "To move down the list, press the first shortcut's key.")
+    private var selectedShortcut = 0
+    /// reloadData clamps selection to row 0 (empty selection is off), which
+    /// fires tableViewSelectionDidChange before the explicit selectRowIndexes
+    /// below — the flag keeps that transient from clobbering selectedShortcut.
+    private var reloadingShortcutTable = false
+    private var recordingKind: RecordingKind?
+    private var recordingIndex: Int?
 
     // Panel pane
     private let themePopup = NSPopUpButton(frame: .zero)
@@ -28,7 +40,6 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate {
     private let indicatorPopup = NSPopUpButton(frame: .zero)
     private let minimizedPopup = NSPopUpButton(frame: .zero)
     private let hiddenPopup = NSPopUpButton(frame: .zero)
-    private let windowlessPopup = NSPopUpButton(frame: .zero)
     private let typingCheck = NSButton(checkboxWithTitle: "Typing starts Fast Search while the panel is open", target: nil, action: nil)
 
     // Search pane
@@ -42,20 +53,24 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate {
     private let rightCmdCheck = NSButton(checkboxWithTitle: "Right ⌘", target: nil, action: nil)
     private let leftOptCheck = NSButton(checkboxWithTitle: "Left ⌥", target: nil, action: nil)
     private let rightOptCheck = NSButton(checkboxWithTitle: "Right ⌥", target: nil, action: nil)
-    private let numberSidebarCheck = NSButton(checkboxWithTitle: "Show the Number Switcher's numbers on the Sidebar", target: nil, action: nil)
 
     // Rules pane
     private let appsOfPopup = NSPopUpButton(frame: .zero)
-    private let excludesField = NSTextField(frame: .zero)
-    private let groupingPopup = NSPopUpButton(frame: .zero)
     private let spacePopup = NSPopUpButton(frame: .zero)
-    private let groupCountStepper = NSStepper(frame: .zero)
-    private let groupCountField = NSTextField(frame: .zero)
-
-    // Sidebar pane
-    private let sidebarsCheck = NSButton(checkboxWithTitle: "Show sidebars (always-on per-screen lists)", target: nil, action: nil)
-    private let sidebarsWindowlessCheck = NSButton(checkboxWithTitle: "Include running apps without windows", target: nil, action: nil)
-    private let sidebarsNumbersCheck = NSButton(checkboxWithTitle: "Show numbers next to sidebar rows", target: nil, action: nil)
+    private let bySpaceRadio = NSButton(radioButtonWithTitle: "By Space", target: nil, action: nil)
+    private let oneGroupRadio = NSButton(radioButtonWithTitle: "In One Group", target: nil, action: nil)
+    private let manuallyRadio = NSButton(radioButtonWithTitle: "Manually", target: nil, action: nil)
+    private let groupSlider = NSSlider(value: 5, minValue: 1, maxValue: 9, target: nil, action: nil)
+    private let windowlessPopup = NSPopUpButton(frame: .zero)
+    private let groupHelp = NSTextField(wrappingLabelWithString: "This applies to Sidebar, Number Switcher and Gesture Switcher. Command-Tab has its own separate options. When set to Manually, new apps & windows are distributed across groups; but you can re-order them or move them between groups by drag & drop and reserve spots for apps from the right-click menu.")
+    private let countHelp = NSTextField(wrappingLabelWithString: "With \"In One Group\" or \"Manually\" there's an option to show the Numbers Badge. When \"Manually\" is selected groups can also be renamed.")
+    private let windowlessHelp = NSTextField(wrappingLabelWithString: "Shows apps for which there are no AX windows, e.g. apps with hidden or background-only windows.")
+    private let patternHelp = NSTextField(wrappingLabelWithString: "Window Title Patterns can be used to hide specific windows of an app. Use plain text for contains-matching, \"=\" for exact matches and \"^\"/\"$\" to anchor to the start/end of the title.")
+    private let excludeTable = NSTableView()
+    private let excludeScroll = NSScrollView()
+    private let plusButton = NSButton(title: "+", target: nil, action: nil)
+    private let minusButton = NSButton(title: "−", target: nil, action: nil)
+    private var excludeRows: [(bundleId: String, pattern: String)] = []
 
     private var built = false
 
@@ -66,7 +81,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate {
 
     private var prefsWindow: NSWindow {
         if let w = window { return w }
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 400),
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 660),
                          styleMask: [.titled, .closable],
                          backing: .buffered, defer: false)
         w.title = "alt-tab Preferences"
@@ -99,29 +114,64 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate {
         themePopup.addItems(withTitles: ["Auto", "Vibrant Light", "Vibrant Dark"])
         themePopup.target = self; themePopup.action = #selector(themeChanged(_:))
 
-        // Contexts' fixed four combos; each toggles its trigger and records
-        // its own move-up binding.
-        let shortcutNames = ["⌘Tab", "⌘`", "⌥Tab", "⌥`"]
-        for (i, name) in shortcutNames.enumerated() {
-            let check = NSButton(checkboxWithTitle: name, target: nil, action: nil)
-            check.target = self; check.action = #selector(shortcutToggled(_:)); check.tag = i
-            let upLabel = NSTextField(labelWithString: "—")
-            let upButton = NSButton(title: "Record", target: self, action: #selector(recordShortcutUp(_:)))
-            upButton.bezelStyle = .rounded; upButton.tag = i
-            shortcutRows.append(ShortcutRow(check: check, upLabel: upLabel, upButton: upButton))
-        }
+        // Contexts' shortcut list: "Or" checkbox column + trigger name; the
+        // selected row's move-up recorder sits to its right.
+        let orCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("or")); orCol.title = "Or"; orCol.width = 36
+        let nameCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name")); nameCol.title = "Shortcut"; nameCol.width = 160
+        shortcutTable.addTableColumn(orCol); shortcutTable.addTableColumn(nameCol)
+        shortcutTable.dataSource = self; shortcutTable.delegate = self
+        shortcutTable.style = .plain
+        shortcutTable.rowSizeStyle = .small
+        shortcutTable.allowsEmptySelection = false
+        shortcutScroll.documentView = shortcutTable
+        shortcutScroll.hasVerticalScroller = true
+        shortcutScroll.heightAnchor.constraint(equalToConstant: 128).isActive = true
+        shortcutScroll.widthAnchor.constraint(equalToConstant: 240).isActive = true
+
+        activateChip.bezelStyle = .rounded
+        activateChip.target = self; activateChip.action = #selector(activateChipClicked(_:))
+        activateClear.bezelStyle = .rounded; activateClear.controlSize = .small
+        activateClear.target = self; activateClear.action = #selector(activateCleared(_:))
+        moveUpChip.bezelStyle = .rounded
+        moveUpChip.target = self; moveUpChip.action = #selector(moveUpChipClicked(_:))
+        moveUpClear.bezelStyle = .rounded; moveUpClear.controlSize = .small
+        moveUpClear.target = self; moveUpClear.action = #selector(moveUpCleared(_:))
+        plusShortcut.bezelStyle = .smallSquare; plusShortcut.controlSize = .small
+        plusShortcut.widthAnchor.constraint(equalToConstant: 26).isActive = true
+        plusShortcut.toolTip = "Add a custom shortcut"
+        plusShortcut.target = self; plusShortcut.action = #selector(plusShortcutClicked(_:))
+        minusShortcut.bezelStyle = .smallSquare; minusShortcut.controlSize = .small
+        minusShortcut.widthAnchor.constraint(equalToConstant: 26).isActive = true
+        minusShortcut.toolTip = "Remove the selected custom shortcut"
+        minusShortcut.target = self; minusShortcut.action = #selector(minusShortcutClicked(_:))
+        moveDownHint.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        moveDownHint.textColor = .secondaryLabelColor
+
+        let actChipRow = NSStackView(views: [activateChip, activateClear]); actChipRow.spacing = 4
+        let upChipRow = NSStackView(views: [moveUpChip, moveUpClear]); upChipRow.spacing = 4
+        let plusRow = NSStackView(views: [plusShortcut, minusShortcut]); plusRow.spacing = 4
+        let detailGrid = NSGridView(views: [
+            [label("Activate switcher with:"), actChipRow],
+            [label("Move up list with:"), upChipRow],
+            [NSGridCell.emptyContentView, moveDownHint],
+        ])
+        detailGrid.rowSpacing = 8
+        detailGrid.column(at: 0).xPlacement = .trailing
+        let listRow = NSStackView(views: [shortcutScroll, detailGrid])
+        listRow.orientation = .horizontal; listRow.spacing = 16; listRow.alignment = .top
 
         delayCheck.target = self; delayCheck.action = #selector(delayToggled(_:))
         typingCheck.target = self; typingCheck.action = #selector(typingToggled(_:))
+        indicatorPopup.target = self; indicatorPopup.action = #selector(indicatorChanged(_:))
 
-        var cmdTabRows: [[NSView]] = [[label("Switch windows:")]]
-        for r in shortcutRows {
-            let upRow = NSStackView(views: [r.upLabel, r.upButton]); upRow.spacing = 8
-            cmdTabRows.append([NSGridCell.emptyContentView, r.check, upRow])
-        }
-        cmdTabRows.append([NSGridCell.emptyContentView, delayCheck])
-        cmdTabRows.append([NSGridCell.emptyContentView, typingCheck])
-        let cmdTabGrid = NSGridView(views: cmdTabRows)
+        let cmdTabGrid = NSGridView(views: [
+            [label("Switch windows:")],
+            [NSGridCell.emptyContentView, listRow],
+            [NSGridCell.emptyContentView, plusRow],
+            [NSGridCell.emptyContentView, delayCheck],
+            [NSGridCell.emptyContentView, typingCheck],
+            [label("Show:"), indicatorPopup],
+        ])
 
         // Panel pane ---------------------------------------------------------
         rowsStepper.minValue = 3; rowsStepper.maxValue = 16; rowsStepper.increment = 1
@@ -133,7 +183,6 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate {
         hoverCheck.target = self; hoverCheck.action = #selector(hoverToggled(_:))
         scrollCheck.target = self; scrollCheck.action = #selector(scrollToggled(_:))
         indicatorPopup.addItems(withTitles: ["Search hints", "Numbers 1–9", "Neither"])
-        indicatorPopup.target = self; indicatorPopup.action = #selector(indicatorChanged(_:))
         for p in [minimizedPopup, hiddenPopup, windowlessPopup] {
             p.addItems(withTitles: ["Show", "Show at bottom", "Do not show"])
             p.target = self; p.action = #selector(policyChanged(_:))
@@ -144,10 +193,8 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate {
             [label("Max rows:"), rowsGroup],
             [label("Panel width:"), widthField],
             [label("Show on:"), displayPopup],
-            [label("Show next to rows:"), indicatorPopup],
             [label("Minimized windows:"), minimizedPopup],
             [label("Hidden apps:"), hiddenPopup],
-            [label("Apps without windows:"), windowlessPopup],
             [NSGridCell.emptyContentView, hoverCheck],
             [NSGridCell.emptyContentView, scrollCheck],
         ])
@@ -169,46 +216,74 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate {
         for c in [leftCmdCheck, rightCmdCheck, leftOptCheck, rightOptCheck] {
             c.target = self; c.action = #selector(numberSideToggled(_:))
         }
-        numberSidebarCheck.target = self; numberSidebarCheck.action = #selector(numberSidebarToggled(_:))
         let sidesRow = NSStackView(views: [leftCmdCheck, rightCmdCheck, leftOptCheck, rightOptCheck])
         sidesRow.orientation = .horizontal; sidesRow.spacing = 12
         let numberGrid = NSGridView(views: [
             [NSGridCell.emptyContentView, digitsCheck],
             [label("Switch numbers with:"), sidesRow],
-            [NSGridCell.emptyContentView, numberSidebarCheck],
         ])
 
         // Rules pane -----------------------------------------------------------
         appsOfPopup.addItems(withTitles: ["Windows of all apps", "Windows of the active app only"])
         appsOfPopup.target = self; appsOfPopup.action = #selector(appsOfChanged(_:))
-        excludesField.target = self; excludesField.action = #selector(excludesEdited(_:))
-        groupingPopup.addItems(withTitles: ["By Space", "In One Group", "Manually"])
-        groupingPopup.target = self; groupingPopup.action = #selector(groupingChanged(_:))
         spacePopup.addItems(withTitles: ["All Spaces", "Visible Spaces (+ fullscreen)", "Visible Spaces"])
         spacePopup.target = self; spacePopup.action = #selector(spaceChanged(_:))
-        groupCountStepper.minValue = 1; groupCountStepper.maxValue = 9; groupCountStepper.increment = 1
-        groupCountField.isEditable = false
-        groupCountStepper.target = self; groupCountStepper.action = #selector(groupCountChanged(_:))
-        let gcGroup = NSStackView(views: [groupCountField, groupCountStepper]); gcGroup.spacing = 6
+        for r in [bySpaceRadio, oneGroupRadio, manuallyRadio] {
+            r.target = self; r.action = #selector(groupingRadioChanged(_:))
+        }
+        groupSlider.minValue = 1; groupSlider.maxValue = 9
+        groupSlider.numberOfTickMarks = 9; groupSlider.allowsTickMarkValuesOnly = true
+        groupSlider.widthAnchor.constraint(equalToConstant: 200).isActive = true
+        groupSlider.target = self; groupSlider.action = #selector(groupCountSliderChanged(_:))
+        windowlessPopup.target = self; windowlessPopup.action = #selector(policyChanged(_:))
+        plusButton.target = self; plusButton.action = #selector(addExclude(_:))
+        plusButton.bezelStyle = .smallSquare; plusButton.controlSize = .small
+        plusButton.widthAnchor.constraint(equalToConstant: 26).isActive = true
+        plusButton.toolTip = "Add an app to exclude"
+        minusButton.target = self; minusButton.action = #selector(removeExclude(_:))
+        minusButton.bezelStyle = .smallSquare; minusButton.controlSize = .small
+        minusButton.widthAnchor.constraint(equalToConstant: 26).isActive = true
+        minusButton.toolTip = "Remove the selected app"
+        let appCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("app")); appCol.title = "App"; appCol.width = 170
+        let patCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("pattern")); patCol.title = "Window Title Pattern"
+        excludeTable.addTableColumn(appCol); excludeTable.addTableColumn(patCol)
+        excludeTable.dataSource = self; excludeTable.delegate = self
+        excludeTable.style = .plain
+        excludeTable.rowSizeStyle = .small
+        excludeScroll.documentView = excludeTable
+        excludeScroll.heightAnchor.constraint(equalToConstant: 160).isActive = true
+        excludeScroll.widthAnchor.constraint(equalToConstant: 420).isActive = true
+        let groupRadios = NSStackView(views: [bySpaceRadio, oneGroupRadio, manuallyRadio])
+        groupRadios.orientation = .vertical; groupRadios.alignment = .leading; groupRadios.spacing = 4
+        let minusRow = NSStackView(views: [plusButton, minusButton]); minusRow.spacing = 4
+        let tickLabels = NSStackView(views: [label("1"), label("5"), label("9")])
+        tickLabels.distribution = .fillEqually
+        // Width comes from the grid: tickLabels shares groupSlider's column.
+        // Never activate cross-view constraints here — both views are detached
+        // (their tab-box ancestor installs lazily), and activating raises
+        // NSInternalInconsistencyException, which AppKit's menu dispatch
+        // swallows, silently abandoning the rest of buildIfNeeded.
+        for c in tickLabels.arrangedSubviews { (c as? NSTextField)?.alignment = .center }
+        for h in [groupHelp, countHelp, windowlessHelp, patternHelp] {
+            h.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+            h.textColor = .secondaryLabelColor
+        }
         let rulesGrid = NSGridView(views: [
+            [label("Group windows:"), groupRadios],
+            [NSGridCell.emptyContentView, groupHelp],
+            [label("Number of Groups:"), groupSlider],
+            [NSGridCell.emptyContentView, tickLabels],
+            [NSGridCell.emptyContentView, countHelp],
+            [label("Apps without windows:"), windowlessPopup],
+            [NSGridCell.emptyContentView, windowlessHelp],
+            [label("Apps to not show:"), excludeScroll],
+            [NSGridCell.emptyContentView, minusRow],
+            [NSGridCell.emptyContentView, patternHelp],
             [label("Show windows of:"), appsOfPopup],
             [label("Show windows from:"), spacePopup],
-            [label("Apps to not show\n(bundle / bundle|title-pattern):"), excludesField],
-            [label("Group windows:"), groupingPopup],
-            [label("Number of groups:"), gcGroup],
         ])
 
-        // Sidebar pane -----------------------------------------------------------
-        sidebarsCheck.target = self; sidebarsCheck.action = #selector(sidebarsToggled(_:))
-        sidebarsWindowlessCheck.target = self; sidebarsWindowlessCheck.action = #selector(sidebarsWindowlessToggled(_:))
-        sidebarsNumbersCheck.target = self; sidebarsNumbersCheck.action = #selector(sidebarsNumbersToggled(_:))
-        let sidebarGrid = NSGridView(views: [
-            [NSGridCell.emptyContentView, sidebarsCheck],
-            [NSGridCell.emptyContentView, sidebarsWindowlessCheck],
-            [NSGridCell.emptyContentView, sidebarsNumbersCheck],
-        ])
-
-        for grid in [cmdTabGrid, panelGrid, searchGrid, numberGrid, rulesGrid, sidebarGrid] {
+        for grid in [cmdTabGrid, panelGrid, searchGrid, numberGrid, rulesGrid] {
             grid.rowSpacing = 10
             grid.columnSpacing = 12
             grid.column(at: 0).xPlacement = .trailing
@@ -219,8 +294,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate {
         tabs.addTabViewItem(tab("Panel", panelGrid))
         tabs.addTabViewItem(tab("Search", searchGrid))
         tabs.addTabViewItem(tab("Number Switcher", numberGrid))
-        tabs.addTabViewItem(tab("Rules", rulesGrid))
-        tabs.addTabViewItem(tab("Sidebar", sidebarGrid))
+        tabs.addTabViewItem(tab("Rules", rulesGrid, height: 575))
         tabs.translatesAutoresizingMaskIntoConstraints = false
 
         let c = prefsWindow.contentView!
@@ -232,15 +306,13 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate {
             tabs.bottomAnchor.constraint(equalTo: c.bottomAnchor, constant: -12),
             rowsField.widthAnchor.constraint(equalToConstant: 44),
             widthField.widthAnchor.constraint(equalToConstant: 64),
-            groupCountField.widthAnchor.constraint(equalToConstant: 32),
-            excludesField.widthAnchor.constraint(equalToConstant: 280),
         ])
     }
 
-    private func tab(_ name: String, _ grid: NSGridView) -> NSTabViewItem {
+    private func tab(_ name: String, _ grid: NSGridView, height: CGFloat = 330) -> NSTabViewItem {
         let item = NSTabViewItem(identifier: name)
         item.label = name
-        let box = NSView(frame: NSRect(x: 0, y: 0, width: 520, height: 330))
+        let box = NSView(frame: NSRect(x: 0, y: 0, width: 520, height: height))
         grid.translatesAutoresizingMaskIntoConstraints = false
         box.addSubview(grid)
         NSLayoutConstraint.activate([
@@ -265,7 +337,6 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate {
         indicatorPopup.selectItem(at: PrefsStore.RowIndicator.allCases.firstIndex(of: PrefsStore.rowIndicator) ?? 0)
         minimizedPopup.selectItem(at: PrefsStore.WindowPolicy.allCases.firstIndex(of: PrefsStore.minimizedPolicy) ?? 0)
         hiddenPopup.selectItem(at: PrefsStore.WindowPolicy.allCases.firstIndex(of: PrefsStore.hiddenPolicy) ?? 0)
-        windowlessPopup.selectItem(at: PrefsStore.WindowPolicy.allCases.firstIndex(of: PrefsStore.windowlessPolicy) ?? 0)
         delayCheck.state = PrefsStore.panelShowDelay ? .on : .off
         typingCheck.state = PrefsStore.typingStartsFastSearch ? .on : .off
 
@@ -279,25 +350,17 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate {
         rightCmdCheck.state = sides & 2 != 0 ? .on : .off
         leftOptCheck.state = sides & 4 != 0 ? .on : .off
         rightOptCheck.state = sides & 8 != 0 ? .on : .off
-        numberSidebarCheck.state = PrefsStore.numberShowOnSidebar ? .on : .off
 
         appsOfPopup.selectItem(at: PrefsStore.appsOfAll ? 0 : 1)
-        excludesField.stringValue = PrefsStore.workspaceExcludes.joined(separator: ", ")
-        groupingPopup.selectItem(at: PrefsStore.Grouping.allCases.firstIndex(of: PrefsStore.grouping) ?? 0)
+        reloadExcludes()
+        bySpaceRadio.state = PrefsStore.grouping == .bySpace ? .on : .off
+        oneGroupRadio.state = PrefsStore.grouping == .oneGroup ? .on : .off
+        manuallyRadio.state = PrefsStore.grouping == .manually ? .on : .off
         spacePopup.selectItem(at: PrefsStore.SpaceScope.allCases.firstIndex(of: PrefsStore.spaceScope) ?? 0)
-        groupCountField.integerValue = PrefsStore.groupCount
-        groupCountStepper.integerValue = PrefsStore.groupCount
+        groupSlider.integerValue = PrefsStore.groupCount
+        windowlessPopup.selectItem(at: PrefsStore.WindowPolicy.allCases.firstIndex(of: PrefsStore.windowlessPolicy) ?? 0)
 
-        sidebarsCheck.state = PrefsStore.sidebarsEnabled ? .on : .off
-        sidebarsWindowlessCheck.state = PrefsStore.sidebarsWindowless ? .on : .off
-        sidebarsNumbersCheck.state = PrefsStore.sidebarsNumbers ? .on : .off
-
-        let list = PrefsStore.shortcuts
-        for r in shortcutRows {
-            let sc = list[r.check.tag]
-            r.check.state = sc.on ? .on : .off
-            r.upLabel.stringValue = sc.upMods == 0 ? "—" : describeBinding(sc.upMods, sc.upKey)
-        }
+        refreshShortcutTable()
     }
 
     private static func fastSearchIndex(for mods: UInt32) -> Int {
@@ -356,10 +419,8 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func themeChanged(_ sender: NSPopUpButton) {
         PrefsStore.theme = PrefsStore.Theme.allCases[sender.indexOfSelectedItem]
-        // Panels are rebuilt per open, but an open panel re-skins in place;
-        // sidebars rebuild with the new material.
+        // Panels are rebuilt per open, but an open panel re-skins in place.
         SwitcherSession.shared.applyThemeLive()
-        SidebarController.shared.applyTheme()
     }
 
     @objc private func rowsEdited(_ sender: NSTextField) { applyRows(sender.integerValue) }
@@ -420,74 +481,252 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate {
         if sender === rightOptCheck { next = PrefsStore.toggledSide(next, 8, sender.state == .on) }
         PrefsStore.numberSideMask = next
     }
-    @objc private func numberSidebarToggled(_ sender: NSButton) { PrefsStore.numberShowOnSidebar = sender.state == .on }
 
     @objc private func appsOfChanged(_ sender: NSPopUpButton) { PrefsStore.appsOfAll = sender.indexOfSelectedItem == 0 }
-    @objc private func groupingChanged(_ sender: NSPopUpButton) {
-        PrefsStore.grouping = PrefsStore.Grouping.allCases[sender.indexOfSelectedItem]
-        SidebarController.shared.refreshForPrefs()
+    @objc private func groupingRadioChanged(_ sender: NSButton) {
+        PrefsStore.grouping = sender === bySpaceRadio ? .bySpace : sender === oneGroupRadio ? .oneGroup : .manually
     }
     @objc private func spaceChanged(_ sender: NSPopUpButton) {
         PrefsStore.spaceScope = PrefsStore.SpaceScope.allCases[sender.indexOfSelectedItem]
         WindowTracker.shared.refresh(reason: "spaceScope")
     }
-    @objc private func groupCountChanged(_ sender: NSStepper) {
-        groupCountField.integerValue = sender.integerValue
-        PrefsStore.groupCount = sender.integerValue
-        SidebarController.shared.refreshForPrefs()
+    @objc private func groupCountSliderChanged(_ sender: NSSlider) {
+        PrefsStore.groupCount = min(9, max(1, sender.integerValue))
     }
-    @objc private func excludesEdited(_ sender: NSTextField) {
-        let ids = sender.stringValue
-            .split(whereSeparator: { $0 == "," || $0 == "\n" })
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-        PrefsStore.workspaceExcludes = ids
+    @objc private func addExclude(_ sender: NSButton) {
+        let menu = NSMenu()
+        let running = NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular && $0.bundleIdentifier != nil }
+            .sorted { ($0.localizedName ?? "").localizedCaseInsensitiveCompare($1.localizedName ?? "") == .orderedAscending }
+        for a in running where !excludeRows.contains(where: { $0.bundleId == a.bundleIdentifier }) {
+            let item = NSMenuItem(title: a.localizedName ?? a.bundleIdentifier!, action: #selector(excludeAppPicked(_:)), keyEquivalent: "")
+            item.target = self
+            item.image = a.icon
+            item.representedObject = a.bundleIdentifier
+            menu.addItem(item)
+        }
+        guard !menu.items.isEmpty else { return }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
+    }
+    @objc private func excludeAppPicked(_ sender: NSMenuItem) {
+        guard let bid = sender.representedObject as? String else { return }
+        excludeRows.append((bundleId: bid, pattern: ""))
+        persistExcludes()
+        excludeTable.reloadData()
+    }
+    @objc private func removeExclude(_ sender: NSButton) {
+        let idx = excludeTable.selectedRow
+        guard idx >= 0, idx < excludeRows.count else { return }
+        excludeRows.remove(at: idx)
+        persistExcludes()
+        excludeTable.reloadData()
+    }
+
+    // MARK: - Exclude table
+
+    private func reloadExcludes() {
+        excludeRows = []
+        var appOnly: [String] = []
+        for entry in PrefsStore.workspaceExcludes {
+            guard let sep = entry.firstIndex(of: "|") else {
+                appOnly.append(entry)
+                continue
+            }
+            excludeRows.append((bundleId: String(entry[..<sep]), pattern: String(entry[entry.index(after: sep)...])))
+        }
+        PrefsStore.workspaceExcludes = appOnly.filter { !$0.isEmpty }
+        for entry in PrefsStore.titleExcludes {
+            guard let sep = entry.firstIndex(of: "|") else { continue }
+            excludeRows.append((bundleId: String(entry[..<sep]), pattern: String(entry[entry.index(after: sep)...])))
+        }
+        excludeTable.reloadData()
+    }
+    private func persistExcludes() {
+        PrefsStore.workspaceExcludes = excludeRows.filter { $0.pattern.isEmpty }.map { $0.bundleId }
+        PrefsStore.titleExcludes = excludeRows.filter { !$0.pattern.isEmpty }.map { "\($0.bundleId)|\($0.pattern)" }
         WindowTracker.shared.refresh(reason: "excludes")
     }
 
-    @objc private func sidebarsToggled(_ sender: NSButton) {
-        PrefsStore.sidebarsEnabled = sender.state == .on
-        if PrefsStore.sidebarsEnabled {
-            SidebarController.shared.enable()
-        } else {
-            SidebarController.shared.disable()
+    func numberOfRows(in tableView: NSTableView) -> Int {
+        tableView === shortcutTable ? PrefsStore.shortcuts.count : excludeRows.count
+    }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        if tableView === shortcutTable {
+            let cell = NSTableCellView()
+            let sc = PrefsStore.shortcuts[row]
+            if tableColumn?.identifier.rawValue == "or" {
+                let box = NSButton(checkboxWithTitle: "", target: self, action: #selector(shortcutToggled(_:)))
+                box.tag = row
+                box.state = sc.on ? .on : .off
+                cell.addSubview(box)
+                box.translatesAutoresizingMaskIntoConstraints = false
+                NSLayoutConstraint.activate([
+                    box.centerXAnchor.constraint(equalTo: cell.centerXAnchor),
+                    box.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                ])
+            } else {
+                let field = NSTextField(string: shortcutName(sc))
+                field.isBordered = false; field.drawsBackground = false
+                field.isSelectable = true
+                cell.addSubview(field)
+                field.translatesAutoresizingMaskIntoConstraints = false
+                NSLayoutConstraint.activate([
+                    field.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
+                    field.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                ])
+            }
+            return cell
         }
+        let id = tableColumn?.identifier.rawValue ?? ""
+        let cell = NSTableCellView()
+        let isApp = id == "app"
+        let field = NSTextField(string: isApp ? excludeRows[row].bundleId : excludeRows[row].pattern)
+        field.isBordered = false; field.drawsBackground = false
+        field.isEditable = !isApp; field.isSelectable = true
+        field.delegate = self
+        field.tag = row
+        field.identifier = tableColumn?.identifier
+        cell.addSubview(field)
+        field.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            field.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
+            field.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -2),
+            field.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+        ])
+        return cell
     }
-    @objc private func sidebarsWindowlessToggled(_ sender: NSButton) {
-        PrefsStore.sidebarsWindowless = sender.state == .on
-        SidebarController.shared.refreshForPrefs()
-    }
-    @objc private func sidebarsNumbersToggled(_ sender: NSButton) {
-        PrefsStore.sidebarsNumbers = sender.state == .on
-        SidebarController.shared.refreshForPrefs()
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard let field = obj.object as? NSTextField,
+              field.identifier?.rawValue == "pattern",
+              field.tag >= 0, field.tag < excludeRows.count else { return }
+        excludeRows[field.tag].pattern = field.stringValue
+        persistExcludes()
     }
 
     // MARK: - Shortcut list actions
 
+    /// Fixed-four display name; custom rows render their recorded combo.
+    private func shortcutName(_ sc: PrefsStore.TriggerShortcut) -> String {
+        let fixed = ["⌘Tab", "⌘`", "⌥Tab", "⌥`"]
+        if sc.mods == 0 && sc.key == 0 { return "Add a shortcut…" }
+        let name = describeBinding(sc.mods, sc.key)
+        return fixed.contains(name) ? name : name
+    }
+
+    private func refreshShortcutTable() {
+        guard built else { return }
+        reloadingShortcutTable = true
+        shortcutTable.reloadData()
+        let rows = PrefsStore.shortcuts.count
+        shortcutTable.selectRowIndexes(IndexSet(integer: min(selectedShortcut, max(0, rows - 1))),
+                                       byExtendingSelection: false)
+        reloadingShortcutTable = false
+        syncShortcutDetail()
+    }
+
+    /// Selected row's chips: activate combo and move-up combo.
+    private func syncShortcutDetail() {
+        guard built, PrefsStore.shortcuts.indices.contains(selectedShortcut) else { return }
+        let sc = PrefsStore.shortcuts[selectedShortcut]
+        let isFixed = selectedShortcut < 4
+        let empty = sc.mods == 0 && sc.key == 0
+        activateChip.title = empty ? "record…" : describeBinding(sc.mods, sc.key)
+        activateClear.isEnabled = !isFixed && !empty
+        moveUpChip.title = sc.upMods == 0 ? "—" : describeBinding(sc.upMods, sc.upKey)
+        moveUpClear.isEnabled = sc.upMods != 0
+        minusShortcut.isEnabled = !isFixed
+    }
+
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        guard (notification.object as? NSTableView) === shortcutTable,
+              !reloadingShortcutTable else { return }
+        selectedShortcut = shortcutTable.selectedRow
+        if selectedShortcut < 0 { selectedShortcut = 0; return }
+        syncShortcutDetail()
+    }
+
     @objc private func shortcutToggled(_ sender: NSButton) {
+        stopRecording()   // a list mutation must never leave the tap suspended
         var list = PrefsStore.shortcuts
         list[sender.tag].on = sender.state == .on
         PrefsStore.shortcuts = list
         SwitcherSession.shared.installShortcuts()
     }
 
-    @objc private func recordShortcutUp(_ sender: NSButton) {
-        if recordingUp == sender.tag { stopRecording(); return }
-        recordingUp = sender.tag
-        shortcutRows[sender.tag].upLabel.stringValue = "press keys…"
+    @objc private func plusShortcutClicked(_ sender: NSButton) {
+        stopRecording()   // keep at most one armed recorder, never across a reselect
+        var list = PrefsStore.shortcuts
+        list.append(PrefsStore.TriggerShortcut(on: false, mods: 0, key: 0, upMods: 0, upKey: 0))
+        PrefsStore.shortcuts = list
+        selectedShortcut = list.count - 1
+        refreshShortcutTable()
+    }
+
+    @objc private func minusShortcutClicked(_ sender: NSButton) {
+        stopRecording()   // removing the armed row must also un-suspend the tap
+        guard selectedShortcut >= 4, PrefsStore.shortcuts.count > selectedShortcut else { return }
+        var list = PrefsStore.shortcuts
+        list.remove(at: selectedShortcut)
+        PrefsStore.shortcuts = list
+        // Only fixed rows may remain: clamp to the last valid index (their
+        // chips must re-sync; an out-of-range index would skip syncShortcutDetail).
+        selectedShortcut = min(4, list.count - 1)
+        SwitcherSession.shared.installShortcuts()
+        refreshShortcutTable()
+    }
+
+    @objc private func activateChipClicked(_ sender: NSButton) {
+        guard selectedShortcut < PrefsStore.shortcuts.count else { return }
+        if recordingKind == .trigger, recordingIndex == selectedShortcut { stopRecording(); return }
+        recordingKind = .trigger
+        recordingIndex = selectedShortcut
+        activateChip.title = "press keys…"
         startRecording()
+    }
+
+    @objc private func activateCleared(_ sender: NSButton) {
+        guard selectedShortcut >= 4 else { return }
+        var list = PrefsStore.shortcuts
+        list[selectedShortcut].mods = 0; list[selectedShortcut].key = 0
+        list[selectedShortcut].on = false
+        PrefsStore.shortcuts = list
+        SwitcherSession.shared.installShortcuts()
+        refreshShortcutTable()
+    }
+
+    @objc private func moveUpChipClicked(_ sender: NSButton) {
+        guard selectedShortcut < PrefsStore.shortcuts.count else { return }
+        if recordingKind == .moveUp, recordingIndex == selectedShortcut { stopRecording(); return }
+        recordingKind = .moveUp
+        recordingIndex = selectedShortcut
+        moveUpChip.title = "press keys…"
+        startRecording()
+    }
+
+    @objc private func moveUpCleared(_ sender: NSButton) {
+        var list = PrefsStore.shortcuts
+        guard list.indices.contains(selectedShortcut), list[selectedShortcut].upMods != 0 else { return }
+        list[selectedShortcut].upMods = 0; list[selectedShortcut].upKey = 0
+        PrefsStore.shortcuts = list
+        refreshShortcutTable()
     }
 
     private func startRecording() {
         prefsWindow.makeKeyAndOrderFront(nil)
+        // The tap passes events through untouched while recording (suspended):
+        // the recorder's local monitor needs them, and a recorded combo that
+        // matches a live trigger must not be consumed by the tap first.
+        HotkeyCenter.shared.suspended = true
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, self.recordingUp != nil else { return event }
+            guard let self, self.recordingKind != nil else { return event }
             self.handleRecordedKey(event)
             return nil   // consumed
         }
     }
 
-    /// Records a move-up binding: modifier(s) + key (Tab or backtick). Esc cancels.
+    /// Records an activate or move-up binding: modifier(s) + key. Esc cancels.
     private func handleRecordedKey(_ event: NSEvent) {
         if event.keyCode == UInt16(kVK_Escape) {
             stopRecording()
@@ -500,14 +739,20 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate {
         if f.contains(.command) { mask |= UInt32(cmdKey) }
         if f.contains(.shift) { mask |= UInt32(shiftKey) }
         // Require a real accelerator modifier; bare letters would hijack typing.
-        guard mask != 0 else { return }
-        if let index = recordingUp {
-            var list = PrefsStore.shortcuts
+        guard mask != 0, let kind = recordingKind, let index = recordingIndex else { return }
+        var list = PrefsStore.shortcuts
+        guard list.indices.contains(index) else { stopRecording(); return }
+        switch kind {
+        case .moveUp:
             list[index].upMods = mask
             list[index].upKey = UInt32(event.keyCode)
-            PrefsStore.shortcuts = list
-            SwitcherSession.shared.installShortcuts()
+        case .trigger:
+            list[index].mods = mask
+            list[index].key = UInt32(event.keyCode)
+            list[index].on = true
         }
+        PrefsStore.shortcuts = list
+        SwitcherSession.shared.installShortcuts()
         stopRecording()
         syncFromStore()
     }
@@ -516,7 +761,9 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate {
     private func stopRecording() {
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
-        recordingUp = nil
+        recordingKind = nil
+        recordingIndex = nil
+        HotkeyCenter.shared.suspended = false
         if built { syncFromStore() }
     }
 }

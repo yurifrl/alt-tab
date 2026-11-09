@@ -79,12 +79,19 @@ func enumerateWindows() -> [WindowModel] {
         }
     }
     var out: [WindowModel] = []
-    for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
+    for app in NSWorkspace.shared.runningApplications {
+        // Accessory (menu-bar, LSUIElement) apps carry real windows too — this
+        // app's own Preferences window, Contexts' sidebar, 1Password. Only
+        // .prohibited helpers are skipped.
+        guard app.activationPolicy == .regular || app.activationPolicy == .accessory else { continue }
+        let isRegular = app.activationPolicy == .regular
         let axApp = AXUIElementCreateApplication(app.processIdentifier)
         guard let windowsVal = axCopy(axApp, kAXWindowsAttribute),
               CFGetTypeID(windowsVal) == CFArrayGetTypeID() else {
-            // No AX windows at all — potential "windowless app" row.
-            if PrefsStore.windowlessPolicy != .doNotShow, !app.isHidden {
+            // No AX windows at all — potential "windowless app" row. Accessory
+            // apps stay out: menu-bar agents with no window list would flood
+            // the switcher once "Apps without windows" is Show.
+            if isRegular, PrefsStore.windowlessPolicy != .doNotShow, !app.isHidden {
                 out.append(WindowModel(pid: app.processIdentifier,
                                        bundleId: app.bundleIdentifier ?? "",
                                        appLocalName: app.localizedName ?? "?",
@@ -104,6 +111,12 @@ func enumerateWindows() -> [WindowModel] {
         let appHidden = app.isHidden
         for w in windows {
             let title = axString(axCopy(w, kAXTitleAttribute)) ?? ""
+            // Accessory apps list utility surfaces too — untitled menu-bar
+            // strips and overlay hooks (MenuBarAgent, Grammarly, TypeWhisper).
+            // Keep only their titled, normal-level windows: menu-bar agents
+            // sit on CG layers ≥ 1 (strips 24/25, Grammarly overlay 1), and
+            // real surfaces (Preferences panes, 1Password) sit on layer 0.
+            if !isRegular && title.isEmpty { continue }
             let minimized = (axCopy(w, kAXMinimizedAttribute) as? Bool) ?? false
             var frame = CGRect.zero
             if let p = axPoint(axCopy(w, kAXPositionAttribute)),
@@ -116,6 +129,9 @@ func enumerateWindows() -> [WindowModel] {
                 cgId = candidates.first { $1.intersects(frame) }?.key
             }
             let onscreen = cgId.map { onscreenByPid[app.processIdentifier]?.contains($0) ?? false } ?? false
+            // Accessory windows exist only as normal-level CG surfaces; no
+            // layer-0 CG match means overlay/utility (Grammarly edge bar).
+            if !isRegular && cgId == nil { continue }
             out.append(WindowModel(pid: app.processIdentifier,
                                    bundleId: app.bundleIdentifier ?? "",
                                    appLocalName: app.localizedName ?? "?",
@@ -511,14 +527,6 @@ func runExtrasDemo() {
     if SwitcherSession.shared.isOpen { SwitcherSession.shared.close(commit: false) }
     PrefsStore.workspaceExcludes = []
 
-    // Sidebars: per-screen lists mirror the tracker model.
-    WindowTracker.shared.refresh(reason: "extras")
-    SidebarController.shared.enable()
-    if SidebarController.shared.listCount != NSScreen.screens.count {
-        failures.append("sidebar lists \(SidebarController.shared.listCount) ≠ screens \(NSScreen.screens.count)")
-    }
-    SidebarController.shared.disable()
-
     // Gestures: private MultitouchSupport stack installs on the attached devices.
     let devices = GestureSwitch.shared.start()
     GestureSwitch.shared.handler = {}
@@ -528,7 +536,37 @@ func runExtrasDemo() {
     exit(failures.isEmpty ? 0 : 1)
 }
 
+// MARK: - Single-instance guard
+
+/// Exclusive non-blocking `flock` held for the agent's lifetime; the kernel
+/// releases it when the process dies, so a crash never strands the lock and
+/// a relaunch always acquires. Returns false when another agent already runs.
+func acquireAgentLock(at url: URL) -> Bool {
+    try? FileManager.default.createDirectory(
+        at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let fd = open(url.path, O_RDWR | O_CREAT, 0o644)
+    guard fd >= 0 else {
+        print("alt-tab: agent lock unreachable (\(url.path), errno \(errno)) — running without instance guard")
+        return true
+    }
+    if flock(fd, LOCK_EX | LOCK_NB) != 0 {
+        close(fd)
+        let pid = (try? String(contentsOf: url, encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? "?"
+        print("alt-tab: another agent is running (pid \(pid)) — exiting")
+        return false
+    }
+    // Record the holder pid for the refusal message; failure is cosmetic.
+    ftruncate(fd, 0)
+    "\(getpid())".withCString { _ = write(fd, $0, strlen($0)) }
+    return true   // fd stays open: the lock lives as long as this process
+}
+
+let agentLockURL = FileManager.default.homeDirectoryForCurrentUser
+    .appendingPathComponent("Library/Application Support/alt-tab/agent.lock")
+
 func runAgent() {
+    guard acquireAgentLock(at: agentLockURL) else { exit(0) }
     setvbuf(stdout, nil, _IOLBF, 0)   // line-buffered: agent logs interleave with stderr
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)   // status-bar agent, no dock icon
@@ -580,7 +618,6 @@ func runAgent() {
         }
     }
     installWhenReady()
-    if PrefsStore.sidebarsEnabled { SidebarController.shared.enable() }
 
     app.run()   // never returns
 }
