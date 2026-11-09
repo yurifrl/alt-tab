@@ -9,7 +9,6 @@ Clean-room: architecture/techniques/behavior reused; **no** Contexts code, asset
 |---|---|---|
 | Command Tab switcher | Overlay panel per display; app+window list; key-driven cycling; activation on release | P0 |
 | Window model | Live app/window inventory via Accessibility; geometry + titles + minimized state | P0 |
-| Sidebars | Always-visible per-screen window lists (workspaces-aware) | P2 |
 | Number switcher | Direct window jump by index | P2 |
 | Workspaces | Space-aware grouping; rules (exclude apps, no-window apps) | P3 |
 | Gestures | Double-touch trackpad switch (private MultitouchSupport) | P3 |
@@ -57,7 +56,7 @@ Communication flows down only (Core ← UI ← Control); model pushes updates vi
 | 3 | Live tracking | AXObserver wired; panel stays correct across focus/space changes |
 | 4 | Per-display + fullscreen panels | Panels on every screen incl. fullscreen spaces |
 | 5 | Prefs + themes | UserDefaults schema, vibrant light/dark |
-| 6 | Contexts-parity extras | Sidebars, number switcher, workspaces, gestures (in order) |
+| 6 | Contexts-parity extras | Number switcher, workspaces, gestures (in order) |
 
 ## Risks
 
@@ -77,7 +76,7 @@ Communication flows down only (Core ← UI ← Control); model pushes updates vi
 | Live tracking | `WindowTracker.swift` | `track` — NSWorkspace + AXObserver notifications rebuild model, selection pinned |
 | Per-display panels | `SwitcherPanel.swift` | `panel` — geometry: 2 screens → 2 panels, rows partitioned, centered in `visibleFrame` |
 | Prefs + themes | `Prefs.swift` | `prefs` + cross-launch `defaults read AltTabCore` (`at.*` keys) |
-| Parity extras | `SwitcherPanel.swift` (digits/search/excludes), `Sidebar.swift`, `GestureSwitch.swift` | `extras` — search narrows 4→3, excludes filter Chrome, sidebar lists == screens, 2 MT devices installed |
+| Parity extras | `SwitcherPanel.swift` (digits/search/excludes), `GestureSwitch.swift` | `extras` — search narrows 4→3, excludes filter Chrome, 2 MT devices installed |
 | Trigger shortcut list | `Prefs.swift` (`at.shortcuts`), `SwitcherPanel.swift` (`installShortcuts`/`routeKey`/`routeHoldRelease`), `PrefsUI.swift` | Synthetic A–E suite against live agent: hold opens+preselects, Tab/Shift+Tab cycle, release commits, double-tap instant-commits, Esc cancels, trigger-press arming race-safe; per-entry move-up recorded in prefs UI; legacy `at.hotkey.*` keys migrated on launch |
 
 **Event-tap starvation (regression finding, fixed 2026-10-30).** The session tap's run-loop source is added to the main run loop, so any synchronous AX work inside a callback starves it — WindowServer silently drops/disables deliveries mid-hold (observed: lost release and shift+Tab events, commits lagging ~2 s while Chrome was busy). Fixes: `open()`/`openInstantCommit()` no longer sweep AX synchronously in the callback (tracker is observer-maintained), `WindowTracker.refresh` enumerates+filters on a serial background queue with a generation-guarded main-thread apply, and `activate` is split into a fast main-thread raise (`beginActivation`) plus a backgrounded verify poll (`verifyActivation`). `AT_DEBUG=1` enables timestamped tap-level tracing (`TapLog` in `HotkeyCenter.swift`) for diagnosing this class of failure.
