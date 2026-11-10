@@ -63,7 +63,7 @@ enum PrefsStore {
     // MARK: Appearance / layout
 
     static var theme: Theme {
-        get { Theme(rawValue: d.string(forKey: Key.theme) ?? "") ?? .auto }
+        get { Theme(rawValue: d.string(forKey: Key.theme) ?? "") ?? .vibrantDark }
         set { d.set(newValue.rawValue, forKey: Key.theme) }
     }
 
@@ -74,7 +74,7 @@ enum PrefsStore {
 
     /// Panel width in points, Narrow→Wide slider (Contexts default ≈ 560).
     static var panelWidth: Double {
-        get { d.object(forKey: Key.panelWidth) as? Double ?? 560 }
+        get { d.object(forKey: Key.panelWidth) as? Double ?? 920 }
         set { d.set(newValue, forKey: Key.panelWidth) }
     }
 

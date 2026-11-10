@@ -14,12 +14,27 @@ enum SearchText {
         guard !q.isEmpty, !t.isEmpty else { return nil }
         var out: [Range<Int>] = []
         var ti = 0
+        // Partial greedy match: query chars not found are skipped, so rows
+        // are ranked by how much of the query they cover, never dropped.
         for qc in q {
-            guard let hit = t[ti...].firstIndex(of: qc) else { return nil }
+            guard ti < t.count, let hit = t[ti...].firstIndex(of: qc) else { continue }
             out.append(hit..<(hit + 1))
             ti = hit + 1
         }
-        return out
+        return out.isEmpty ? nil : out
+    }
+
+    /// Ranking score: matched-char coverage, plus bonuses for a contiguous
+    /// substring (prefix of the app name best).
+    static func score(app: String, title: String, query: String) -> Int {
+        let q = query.lowercased()
+        func one(_ text: String, prefixBonus: Int, subBonus: Int) -> Int {
+            let t = text.lowercased()
+            var sc = (positions(in: text, query: query)?.count ?? 0) * 10
+            if t.hasPrefix(q) { sc += prefixBonus } else if t.contains(q) { sc += subBonus }
+            return sc
+        }
+        return max(one(app, prefixBonus: 100, subBonus: 60), one(title, prefixBonus: 50, subBonus: 30))
     }
 
     static func isMatch(_ text: String, query: String) -> Bool {
@@ -34,9 +49,15 @@ final class PanelRowView: NSView {
     private let appName = NSTextField(labelWithString: "")
     private let iconView = NSImageView()
     private let title = NSTextField(labelWithString: "")
+    /// Clips the title so an overlong selected title can scroll (marquee).
+    private let titleClip = NSView()
     /// Title text + match ranges for recoloring on highlight toggle.
     private var titleText = ""
     private var titleMatches: [Range<Int>]?
+    private var appMatches: [Range<Int>]?
+    private var hintLetter = ""
+    private var appNameText = ""
+    private var isSelected = false
     /// Click target ownership: session checks `isHoverSelectable` on hit-test.
     private(set) var globalIndex: Int = -1
     var onHover: ((Int) -> Void)?
@@ -45,18 +66,22 @@ final class PanelRowView: NSView {
     init() {
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = 5
+        layer?.cornerRadius = 6
         addTrackingArea(NSTrackingArea(
             rect: .infinite, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
             owner: self, userInfo: nil))
-        for view in [hint, appName, iconView, title] { addSubview(view) }
+        titleClip.wantsLayer = true
+        titleClip.layer?.masksToBounds = true
+        titleClip.addSubview(title)
+        for view in [hint, appName, iconView, titleClip] { addSubview(view) }
         hint.font = .monospacedSystemFont(ofSize: 12, weight: .medium)
-        hint.alignment = .center
-        appName.font = .systemFont(ofSize: 13)
+        hint.alignment = .left
+        appName.font = .systemFont(ofSize: 13, weight: .medium)
         appName.alignment = .right
         appName.cell?.truncatesLastVisibleLine = true
         title.font = .systemFont(ofSize: 13)
         title.cell?.truncatesLastVisibleLine = true
+        for f in [title, appName] { f.maximumNumberOfLines = 1; f.lineBreakMode = .byTruncatingTail }
     }
 
     required init?(coder: NSCoder) { fatalError("unsupported") }
@@ -66,10 +91,44 @@ final class PanelRowView: NSView {
     override func layout() {
         super.layout()
         let w = bounds.width, h = bounds.height
-        hint.frame = NSRect(x: 10, y: 0, width: 16, height: h)
-        appName.frame = NSRect(x: 30, y: 0, width: 166, height: h)
-        iconView.frame = NSRect(x: 204, y: (h - 20) / 2, width: 20, height: 20)
-        title.frame = NSRect(x: 230, y: 0, width: w - 238, height: h)
+        func centered(_ f: NSTextField, x: CGFloat, width: CGFloat) {
+            let th = min(h, f.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: 10_000, height: h)).height ?? 17)
+            f.frame = NSRect(x: x, y: (h - th) / 2, width: width, height: th)
+        }
+        hint.frame = NSRect(x: 8, y: (h - 16) / 2, width: 16, height: 16)
+        centered(appName, x: 28, width: 170)
+        iconView.frame = NSRect(x: 206, y: (h - 20) / 2, width: 20, height: 20)
+        titleClip.frame = NSRect(x: 234, y: 0, width: max(0, w - 242), height: h)
+        layoutTitle()
+    }
+
+    /// Selected + too long → single-line clipped field that scrolls back and
+    /// forth; otherwise a plain tail-truncated label.
+    private func layoutTitle() {
+        let h = bounds.height, cw = titleClip.bounds.width
+        title.layer?.removeAllAnimations()
+        let full = ceil(title.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: 100_000, height: h)).width ?? 0) + 2
+        let th = min(h, title.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: 10_000, height: h)).height ?? 17)
+        if isSelected, full > cw {
+            title.lineBreakMode = .byClipping
+            title.frame = NSRect(x: 0, y: (h - th) / 2, width: full, height: th)
+            title.wantsLayer = true
+            let dist = full - cw
+            let travel = Double(dist) / 45          // ~45 pt/s
+            let hold = 1.0                          // pause at each end
+            let total = hold + travel + hold + travel
+            let a = CAKeyframeAnimation(keyPath: "transform.translation.x")
+            a.values = [0, 0, -dist, -dist, 0]
+            a.keyTimes = [0, hold / total, (hold + travel) / total, (2 * hold + travel) / total, 1].map { NSNumber(value: $0) }
+            a.timingFunctions = [CAMediaTimingFunction(name: .linear), CAMediaTimingFunction(name: .easeInEaseOut),
+                                 CAMediaTimingFunction(name: .linear), CAMediaTimingFunction(name: .easeInEaseOut)]
+            a.duration = total
+            a.repeatCount = .infinity
+            title.layer?.add(a, forKey: "marquee")
+        } else {
+            title.lineBreakMode = .byTruncatingTail
+            title.frame = NSRect(x: 0, y: (h - th) / 2, width: cw, height: th)
+        }
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -87,8 +146,11 @@ final class PanelRowView: NSView {
         onHover?(globalIndex + (event.deltaY < 0 ? -1 : 1))
     }
 
-    func configure(_ wm: WindowModel, globalIndex idx: Int = -1, query: String = "") {
+    func configure(_ wm: WindowModel, globalIndex idx: Int = -1, query: String = "", hint: Character? = nil) {
         globalIndex = idx
+        hintLetter = hint.map { String($0) } ?? ""
+        appMatches = query.isEmpty ? nil : SearchText.positions(in: wm.appLocalName, query: query)
+        appNameText = wm.appLocalName
         iconView.image = NSRunningApplication(processIdentifier: wm.pid)?.icon
         appName.stringValue = wm.appLocalName
         var text = wm.title
@@ -107,7 +169,7 @@ final class PanelRowView: NSView {
             hint.stringValue = globalIndex >= 0 && globalIndex < 9 ? String(globalIndex + 1) : ""
             hint.font = .monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
         case .searchHints:
-            hint.stringValue = appName.stringValue.first.map { String($0).lowercased() } ?? ""
+            hint.stringValue = hintLetter
             hint.font = .monospacedSystemFont(ofSize: 12, weight: .medium)
         case .neither:
             hint.stringValue = ""
@@ -115,17 +177,30 @@ final class PanelRowView: NSView {
     }
 
     func setHighlighted(_ on: Bool) {
+        isSelected = on
         layer?.backgroundColor = on ? NSColor.controlAccentColor.cgColor : NSColor.clear.cgColor
-        hint.textColor = on ? NSColor.white.withAlphaComponent(0.75) : NSColor.tertiaryLabelColor
-        appName.textColor = on ? .white : .labelColor
-        let attr = NSMutableAttributedString(string: titleText)
-        attr.addAttribute(.foregroundColor, value: NSColor.labelColor,
-                          range: NSRange(location: 0, length: (titleText as NSString).length))
-        for r in titleMatches ?? [] {
-            attr.addAttribute(.foregroundColor, value: NSColor.systemOrange,
+        hint.textColor = on ? NSColor.white.withAlphaComponent(0.85) : NSColor.secondaryLabelColor
+        title.attributedStringValue = styled(titleText, matches: titleMatches, selected: on)
+        layoutTitle()
+        let styledName = NSMutableAttributedString(attributedString: styled(appNameText, matches: appMatches, selected: on))
+        let para = NSMutableParagraphStyle()
+        para.alignment = .right
+        para.lineBreakMode = .byTruncatingTail
+        styledName.addAttribute(.paragraphStyle, value: para, range: NSRange(location: 0, length: styledName.length))
+        appName.attributedStringValue = styledName
+    }
+
+    /// Base color (white on the accent row) with matched characters in red.
+    private func styled(_ text: String, matches: [Range<Int>]?, selected: Bool) -> NSAttributedString {
+        let attr = NSMutableAttributedString(string: text)
+        attr.addAttribute(.font, value: NSFont.systemFont(ofSize: 13, weight: .medium), range: NSRange(location: 0, length: (text as NSString).length))
+        attr.addAttribute(.foregroundColor, value: selected ? NSColor.white : NSColor.labelColor,
+                          range: NSRange(location: 0, length: (text as NSString).length))
+        for r in matches ?? [] {
+            attr.addAttribute(.foregroundColor, value: NSColor.systemRed,
                               range: NSRange(location: r.lowerBound, length: r.upperBound - r.lowerBound))
         }
-        title.attributedStringValue = attr
+        return attr
     }
 }
 
@@ -139,6 +214,9 @@ final class SwitcherPanelController {
         let stack: NSStackView
         var rowViews: [PanelRowView] = []
         var rows: [WindowModel] = []
+        var hints: [Character?] = []
+        /// Global row index → section header shown above that row.
+        var headers: [Int: String] = [:]
         /// Non-empty while the search section (query box + "All Results") shows.
         var searchQuery = ""
         /// Blinking caret timer, alive only while the search section shows.
@@ -201,9 +279,14 @@ final class SwitcherPanelController {
             stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
             caretTimer?.invalidate()
             caretTimer = nil
+            // Search box sits on top (Raycast/Contexts layout), rows below.
+            let searchHeight = searchQuery.isEmpty ? 0 : buildSearchSection()
+            var headerCount = 0
             rowViews = rows.enumerated().map { off, wm in
+                if let title = headers[globalBase + off] { addSectionHeader(title); headerCount += 1 }
                 let row = PanelRowView()
-                row.configure(wm, globalIndex: globalBase + off, query: searchQuery)
+                row.configure(wm, globalIndex: globalBase + off, query: searchQuery,
+                              hint: off < hints.count ? hints[off] : nil)
                 row.onHover = { [weak self] idx in self?.hoverCallback?(idx) }
                 row.onClick = { [weak self] idx in self?.clickCallback?(idx) }
                 row.translatesAutoresizingMaskIntoConstraints = false
@@ -214,9 +297,8 @@ final class SwitcherPanelController {
                 ])
                 return row
             }
-            let searchHeight = searchQuery.isEmpty ? 0 : buildSearchSection()
             let height = 2 * SwitcherPanelController.inset + CGFloat(rows.count) * SwitcherPanelController.rowHeight
-                + CGFloat(max(0, rows.count - 1)) * SwitcherPanelController.rowSpacing + searchHeight
+                + searchHeight + CGFloat(headerCount) * 21
             var f = panel.frame
             let width = PrefsStore.panelWidth
             f.size = NSSize(width: width, height: height)
@@ -225,16 +307,41 @@ final class SwitcherPanelController {
             panel.setFrame(f, display: false)
         }
 
+        /// Hairline divider + centered section title ("Recommended", …): 25pt.
+        private func addSectionHeader(_ text: String) {
+            let divider = NSView()
+            divider.wantsLayer = true
+            let label = NSTextField(labelWithString: text)
+            label.font = .systemFont(ofSize: 12, weight: .medium)
+            label.textColor = .tertiaryLabelColor
+            label.alignment = .center
+            label.translatesAutoresizingMaskIntoConstraints = false
+            divider.translatesAutoresizingMaskIntoConstraints = false
+            for v in [divider, label] { stack.addArrangedSubview(v) }
+            NSAppearance.current = panel.appearance
+            defer { NSAppearance.current = nil }
+            divider.layer?.backgroundColor = NSColor.separatorColor.cgColor
+            NSLayoutConstraint.activate([
+                divider.heightAnchor.constraint(equalToConstant: 1),
+                divider.leadingAnchor.constraint(equalTo: effect.leadingAnchor),
+                divider.widthAnchor.constraint(equalTo: effect.widthAnchor),
+                label.heightAnchor.constraint(equalToConstant: 20),
+                label.widthAnchor.constraint(equalTo: effect.widthAnchor, constant: -2 * SwitcherPanelController.inset),
+            ])
+        }
+
         /// Search section (Contexts Command-Tab): rounded query box with a
         /// blinking caret, full-width hairline divider, centered "All Results".
         /// Returns its total height.
         private func buildSearchSection() -> CGFloat {
             let box = NSView()
             box.wantsLayer = true
-            box.layer?.cornerRadius = 6
-            box.layer?.borderWidth = 1
+            box.layer?.cornerRadius = 8
+            box.layer?.borderWidth = 0
             let query = NSTextField(labelWithString: searchQuery)
             query.font = .systemFont(ofSize: 14)
+            query.textColor = searchQuery.isEmpty ? .tertiaryLabelColor : .labelColor
+            query.lineBreakMode = .byTruncatingHead
             query.translatesAutoresizingMaskIntoConstraints = false
             let caret = NSView()
             caret.wantsLayer = true
@@ -246,45 +353,30 @@ final class SwitcherPanelController {
             // the effect view, valid only once the box shares that ancestor.
             stack.addArrangedSubview(box)
             NSLayoutConstraint.activate([
-                box.heightAnchor.constraint(equalToConstant: 34),
+                box.heightAnchor.constraint(equalToConstant: 30),
                 box.widthAnchor.constraint(equalTo: effect.widthAnchor, constant: -2 * SwitcherPanelController.inset),
                 query.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 10),
+                query.trailingAnchor.constraint(lessThanOrEqualTo: box.trailingAnchor, constant: -12),
                 query.centerYAnchor.constraint(equalTo: box.centerYAnchor),
                 caret.widthAnchor.constraint(equalToConstant: 1.5),
                 caret.heightAnchor.constraint(equalToConstant: 16),
                 caret.centerYAnchor.constraint(equalTo: box.centerYAnchor),
-                caret.leadingAnchor.constraint(equalTo: query.trailingAnchor, constant: 2),
+                searchQuery.isEmpty
+                    ? caret.trailingAnchor.constraint(equalTo: query.leadingAnchor, constant: -2)
+                    : caret.leadingAnchor.constraint(equalTo: query.trailingAnchor, constant: 2),
             ])
-            let divider = NSView()
-            divider.wantsLayer = true
-            let header = NSTextField(labelWithString: "All Results")
-            header.font = .systemFont(ofSize: 12)
-            header.alignment = .center
-            header.translatesAutoresizingMaskIntoConstraints = false
-            // Add to the stack BEFORE activating cross-view constraints — an
-            // anchor pair only resolves once both views share an ancestor.
-            for v in [divider, header] { stack.addArrangedSubview(v) }
-            stack.setCustomSpacing(6, after: box)
-            stack.setCustomSpacing(0, after: divider)
-            stack.setCustomSpacing(6, after: header)
-            NSLayoutConstraint.activate([
-                divider.heightAnchor.constraint(equalToConstant: 1),
-                divider.leadingAnchor.constraint(equalTo: effect.leadingAnchor),
-                divider.widthAnchor.constraint(equalTo: effect.widthAnchor),
-                header.heightAnchor.constraint(equalToConstant: 24),
-                header.widthAnchor.constraint(equalTo: effect.widthAnchor, constant: -2 * SwitcherPanelController.inset),
-            ])
+            stack.setCustomSpacing(4, after: box)
+            NSLayoutConstraint.activate([])
             // Resolve the chrome colors against the panel's appearance, not
             // the app's (a dark panel built while the app is light-mode).
             NSAppearance.current = panel.appearance
             defer { NSAppearance.current = nil }
             box.layer?.borderColor = NSColor.separatorColor.cgColor
-            box.layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
-            divider.layer?.backgroundColor = NSColor.separatorColor.cgColor
+            box.layer?.backgroundColor = NSColor.clear.cgColor
             caretTimer = Timer.scheduledTimer(withTimeInterval: 0.53, repeats: true) { [weak caret] _ in
                 caret?.isHidden.toggle()
             }
-            return 34 + 6 + 1 + 24 + 6
+            return 30 + 4
         }
 
         var hoverCallback: ((Int) -> Void)?
@@ -309,12 +401,25 @@ final class SwitcherPanelController {
     private var index: [(panel: Int, row: Int)] = []
     private(set) var rows: [WindowModel] = []
     private(set) var selection = 0
+    /// Quick-go letter per global row index (unique across the list).
+    private var hintByIndex: [Character?] = []
+
+    /// Global index of the row whose quick-go letter is `ch`.
+    func indexForHint(_ ch: Character) -> Int? {
+        hintByIndex.firstIndex { $0 == ch }
+    }
+
+    /// Unique letter per row: first free letter of the app name, then any
+    /// free letter of the title, then any free letter at all.
+    static func assignHints(_ models: [WindowModel]) -> [Character?] {
+        models.map { $0.appLocalName.lowercased().first { $0.isLetter } }
+    }
 
     var onCommit: ((WindowModel) -> Void)?
 
-    static let rowHeight: CGFloat = 40
+    static let rowHeight: CGFloat = 30
     static let rowSpacing: CGFloat = 4
-    static let inset: CGFloat = 10
+    static let inset: CGFloat = 8
     /// Hard cap independent of the user pref (prefs min is 3, UI max 16).
     private static let hardRowCap = 16
 
@@ -349,7 +454,7 @@ final class SwitcherPanelController {
         if let wm = selectedModel { onCommit?(wm) }
     }
 
-    func show(_ models: [WindowModel], query: String = "") {
+    func show(_ models: [WindowModel], query: String = "", headers: [Int: String] = [:]) {
         // Kill previous overlays BEFORE replacing the array — otherwise every
         // open() leaks an NSPanel on screen that nothing can ever dismiss.
         screenPanels.forEach { $0.orderOut() }
@@ -368,16 +473,22 @@ final class SwitcherPanelController {
             let mouse = NSEvent.mouseLocation
             screens = [allScreens.first { $0.frame.contains(mouse) } ?? allScreens[0]]
         }
+        // Hints follow the display-split order (rows are flattened by panel).
         var assigned: [[WindowModel]] = Array(repeating: [], count: screens.count)
         for wm in rows {
             let sIdx = screens.firstIndex(where: { $0.frame.intersects(wm.frame) }) ?? 0
             assigned[sIdx].append(wm)
         }
+        let hints = Self.assignHints(assigned.flatMap { $0 })
+        hintByIndex = hints
         screenPanels = zip(screens, assigned).map { ScreenPanel(screenFrame: $0.0.visibleFrame) }
         for (pi, sp) in screenPanels.enumerated() {
             sp.hoverCallback = { [weak self] idx in self?.hoverSelect(idx) }
             sp.clickCallback = { [weak self] idx in self?.clickCommit(idx) }
             sp.rows = assigned[pi]
+            sp.headers = headers
+            let base = assigned.prefix(pi).reduce(0) { $0 + $1.count }
+            sp.hints = Array(hints[base..<(base + assigned[pi].count)])
             sp.searchQuery = query
             sp.rebuild(globalBase: assigned.prefix(pi).reduce(0) { $0 + $1.count })
             for ri in 0..<assigned[pi].count {
@@ -440,6 +551,25 @@ final class SwitcherSession {
     private var pendingSearchMods: UInt32?
     /// Remembered queries (Search Shortcuts), newest first, capped by depth.
     private var searchMemory: [String] = []
+    /// query → window last committed for it (pid + title).
+    private var lastSelected: [String: (pid: pid_t, title: String)] = [:]
+    private var topIsRemembered = false
+
+    /// Section headers for the current query (global row index → title).
+    private func sectionHeaders(rowCount: Int) -> [Int: String] {
+        guard !searchQuery.isEmpty, rowCount > 0 else { return [:] }
+        if topIsRemembered {
+            var h: [Int: String] = [0: "Last Selected for '\(searchQuery)…'"]
+            if rowCount > 1 { h[1] = "Other Results" }
+            return h
+        }
+        if searchQuery.count == 1 {
+            var h: [Int: String] = [0: "Recommended"]
+            if rowCount > 1 { h[1] = "Other Results" }
+            return h
+        }
+        return [0: "All Results"]
+    }
     /// Hold-to-switch: side-mask bits of the trigger's modifiers while the
     /// trigger is being held; nil when no hold is in progress.
     private var holdSideBits: UInt32?
@@ -478,6 +608,14 @@ final class SwitcherSession {
             return self.routeGlobalKey(event, sideMask: sideMask)
         }
     }
+
+    /// Physical key → letter (ANSI). Independent of held modifiers: with ⌥
+    /// down the typed character is "å", not "a", which broke hint lookup.
+    private static let letterKeycodes: [UInt32: Character] = [
+        0: "a", 11: "b", 8: "c", 2: "d", 14: "e", 3: "f", 5: "g", 4: "h", 34: "i", 38: "j",
+        40: "k", 37: "l", 46: "m", 45: "n", 31: "o", 35: "p", 12: "q", 15: "r", 1: "s",
+        17: "t", 32: "u", 9: "v", 13: "w", 7: "x", 16: "y", 6: "z",
+    ]
 
     /// Digit row → selection index (kVK_ANSI_1..9; note non-contiguous keycodes).
     private static let digitKeycodes: [UInt32: Int] = [
@@ -524,7 +662,7 @@ final class SwitcherSession {
         // callbacks run slow, silently dropping later hotkeys (the same hazard
         // commitAsync guards). Show the tracker's current model now; refresh
         // and re-render on the next main-loop turn.
-        searchQuery = PrefsStore.searchShortcutsDepth > 0 ? (searchMemory.first ?? "") : ""
+        searchQuery = ""
         let showed = renderFromTracker(selectFirst: true)
         if selectNext { panel.moveSelection(1) }
         print("panel: opened rows=\(panel.rows.count) query=\"\(searchQuery)\" selectNext=\(selectNext)")
@@ -625,14 +763,26 @@ final class SwitcherSession {
             rows = rows.filter { $0.pid == active }
         }
         // Search: substring, or fuzzy subsequence when "allow mismatch" is on.
-        if !searchQuery.isEmpty {
-            rows = rows.filter { searchMatches($0) }
-        }
         let frontPid = NSWorkspace.shared.frontmostApplication?.processIdentifier
         // Focused app's windows first, AX order preserved within each app.
         let front = rows.filter { $0.pid == frontPid }
         let rest = rows.filter { $0.pid != frontPid }
-        return front + rest
+        rows = front + rest
+        topIsRemembered = false
+        guard !searchQuery.isEmpty else { return rows }
+        // Search ranks, never filters (Contexts): best match first, stable.
+        let q = searchQuery
+        var ranked = rows.enumerated().map { (i: $0.offset, wm: $0.element,
+            sc: SearchText.score(app: $0.element.appLocalName, title: $0.element.title, query: q)) }
+        ranked.sort { $0.sc != $1.sc ? $0.sc > $1.sc : $0.i < $1.i }
+        rows = ranked.map(\.wm)
+        // "Last Selected for 'q…'": the window committed last time for this query.
+        if let mem = lastSelected[q],
+           let idx = rows.firstIndex(where: { $0.pid == mem.pid && $0.title == mem.title }) {
+            rows.insert(rows.remove(at: idx), at: 0)
+            topIsRemembered = true
+        }
+        return rows
     }
 
     /// Renders rows straight from the tracker's current model (no re-enumeration —
@@ -652,7 +802,7 @@ final class SwitcherSession {
             return false
         }
         isOpen = true
-        panel.show(rows, query: searchQuery)
+        panel.show(rows, query: searchQuery, headers: sectionHeaders(rowCount: rows.count))
         if selectFirst { panel.setSelection(0) }
         return true
     }
@@ -733,6 +883,7 @@ final class SwitcherSession {
             searchMemory.insert(searchQuery, at: 0)
             while searchMemory.count > PrefsStore.searchShortcutsDepth { searchMemory.removeLast() }
         }
+        if commit, !searchQuery.isEmpty, let t = target { lastSelected[searchQuery] = (t.pid, t.title) }
         pendingSearchMods = nil
         holdSideBits = nil
         activeTrigger = nil
@@ -759,20 +910,21 @@ final class SwitcherSession {
             }
             pendingSearchMods = mods   // keep-alive while modifiers held
         }
-        // In-panel action keys: modifier+letter acts on the selected row.
-        if let acted = Self.actionKey(of: event, mods: PrefsStore.actionQuitMods, letter: "q") {
+        // In-panel action keys: modifier+letter acts on the selected row — only
+        // before a query starts, so typing words never hides/quits an app.
+        if searchQuery.isEmpty, let acted = Self.actionKey(of: event, mods: PrefsStore.actionQuitMods, letter: "q") {
             if acted { actOnSelected(.quitApp) }
             return acted
         }
-        if let acted = Self.actionKey(of: event, mods: PrefsStore.actionCloseWinMods, letter: "k") {
+        if searchQuery.isEmpty, let acted = Self.actionKey(of: event, mods: PrefsStore.actionCloseWinMods, letter: "k") {
             if acted { actOnSelected(.closeWindow) }
             return acted
         }
-        if let acted = Self.actionKey(of: event, mods: PrefsStore.actionMinimizeMods, letter: "m") {
+        if searchQuery.isEmpty, let acted = Self.actionKey(of: event, mods: PrefsStore.actionMinimizeMods, letter: "m") {
             if acted { actOnSelected(.minimize) }
             return acted
         }
-        if let acted = Self.actionKey(of: event, mods: PrefsStore.actionHideMods, letter: "h") {
+        if searchQuery.isEmpty, let acted = Self.actionKey(of: event, mods: PrefsStore.actionHideMods, letter: "h") {
             if acted { actOnSelected(.hide) }
             return acted
         }
@@ -828,10 +980,9 @@ final class SwitcherSession {
                 } else {
                     panel.setSelection(idx)
                 }
-            } else if PrefsStore.typingStartsFastSearch,
-                      let ch = Self.character(of: event)?.lowercased(),
-                      ch.count == 1, ch.first!.isLetter || ch == " ",
+            } else if let ch = Self.letterKeycodes[kc].map({ String($0) }) ?? (kc == 49 && !searchQuery.isEmpty ? " " : nil),
                       Self.searchEligibleFlags(event.flags) {
+                // Every letter types into the search; commit is Enter / release.
                 searchQuery.append(ch)
                 applyQuery()
             } else {
@@ -848,7 +999,10 @@ final class SwitcherSession {
         let carbon = HotkeyCenter.carbonFlags(fromCG: event.flags.intersection(HotkeyCenter.modifierBitsPublic))
         guard carbon != 0 else { return nil }
         guard carbon == mods else { return nil }
-        guard let ch = character(of: event)?.lowercased(), ch.count == 1, ch.first == letter else { return false }
+        // Not this action's letter → keep routing (quick-go / search), never
+        // swallow: with ⌥ held every other letter used to die here.
+        let kc = UInt32(clamping: event.getIntegerValueField(.keyboardEventKeycode))
+        guard letterKeycodes[kc] == letter else { return nil }
         return true
     }
 
@@ -923,12 +1077,7 @@ final class SwitcherSession {
     }
 
     private func applyQuery() {
-        let pinned = panel.selectedModel
-        renderFromTracker(selectFirst: false)
-        if let pinned,
-           let idx = panel.rows.firstIndex(where: { $0.pid == pinned.pid && $0.title == pinned.title }) {
-            panel.setSelection(idx)
-        }
+        renderFromTracker(selectFirst: true)
         print("panel: query=\"\(searchQuery)\" rows=\(panel.rows.count)")
     }
 
