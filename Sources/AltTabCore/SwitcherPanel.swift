@@ -70,6 +70,9 @@ final class PanelRowView: NSView {
     private var editing = false
     /// Draft fully selected (just entered edit mode): next key replaces it.
     private var editAllSelected = false
+    /// Color tag: left-edge bar + soft tint on unselected rows.
+    private let colorBar = NSView()
+    private var colorTag: NSColor?
     private var isSelected = false
     /// Click target ownership: session checks `isHoverSelectable` on hit-test.
     private(set) var globalIndex: Int = -1
@@ -88,7 +91,10 @@ final class PanelRowView: NSView {
         titleClip.wantsLayer = true
         titleClip.layer?.masksToBounds = true
         titleClip.addSubview(title)
-        for view in [hint, appName, iconView, titleClip] { addSubview(view) }
+        for view in [hint, appName, iconView, titleClip, colorBar] { addSubview(view) }
+        colorBar.wantsLayer = true
+        colorBar.layer?.cornerRadius = 1.5
+        colorBar.isHidden = true
         hint.font = .monospacedSystemFont(ofSize: 12, weight: .medium)
         hint.alignment = .left
         appName.font = .systemFont(ofSize: 13, weight: .medium)
@@ -110,6 +116,7 @@ final class PanelRowView: NSView {
             let th = min(h, f.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: 10_000, height: h)).height ?? 17)
             f.frame = NSRect(x: x, y: (h - th) / 2, width: width, height: th)
         }
+        colorBar.frame = NSRect(x: 3, y: (h - 20) / 2, width: 3, height: 20)
         hint.frame = NSRect(x: 8, y: (h - 16) / 2, width: 16, height: 16)
         centered(appName, x: 28, width: 170)
         iconView.frame = NSRect(x: 206, y: (h - 20) / 2, width: 20, height: 20)
@@ -166,6 +173,7 @@ final class PanelRowView: NSView {
         hintLetter = hint.map { String($0) } ?? ""
         baseHintLetter = hintLetter
         editing = false
+        colorTag = ColorTag.color(wm.colorHex)
         appMatches = query.isEmpty ? nil : SearchText.positions(in: wm.displayName, query: query)
         appNameText = wm.displayName
         iconView.image = NSRunningApplication(processIdentifier: wm.pid)?.icon
@@ -178,6 +186,12 @@ final class PanelRowView: NSView {
         alphaValue = wm.ignored ? 0.45 : (wm.minimized ? 0.55 : 1.0)
         applyIndicator()
         setHighlighted(false)
+    }
+
+    /// Live preview while picking a color in the editor (nil = none).
+    func previewColor(_ hex: String?) {
+        colorTag = ColorTag.color(hex)
+        setHighlighted(isSelected)
     }
 
     /// Hold-E editor: the app label becomes `draft` + caret (underlined) and the
@@ -222,7 +236,10 @@ final class PanelRowView: NSView {
 
     func setHighlighted(_ on: Bool) {
         isSelected = on
-        layer?.backgroundColor = on ? NSColor.controlAccentColor.cgColor : NSColor.clear.cgColor
+        colorBar.isHidden = colorTag == nil
+        colorBar.layer?.backgroundColor = colorTag?.cgColor
+        layer?.backgroundColor = on ? NSColor.controlAccentColor.cgColor
+            : (colorTag?.withAlphaComponent(0.13).cgColor ?? NSColor.clear.cgColor)
         hint.textColor = on ? NSColor.white.withAlphaComponent(0.85) : NSColor.secondaryLabelColor
         title.attributedStringValue = styled(titleText, matches: titleMatches, selected: on)
         layoutTitle()
@@ -592,6 +609,36 @@ final class SwitcherPanelController {
         return views.indices.contains(i.row) ? views[i.row] : nil
     }
     func beginRename(_ editor: RenameEditor) { selectedRowView()?.beginEdit(editor) }
+
+    private var swatch: SwatchStripView?
+
+    /// Swatch strip under the selected row (above it when no room below).
+    func updateSwatches(selected: Int?, focused: Bool, previewHex: String?) {
+        guard index.indices.contains(selection) else { return }
+        let i = index[selection]
+        let sp = screenPanels[i.panel]
+        guard sp.rowViews.indices.contains(i.row) else { return }
+        let row = sp.rowViews[i.row]
+        sp.effect.layoutSubtreeIfNeeded()
+        let strip = swatch ?? SwatchStripView()
+        if strip.superview !== sp.effect { strip.removeFromSuperview(); sp.effect.addSubview(strip) }
+        swatch = strip
+        strip.selected = selected
+        strip.focused = focused
+        let r = sp.effect.convert(row.bounds, from: row)
+        let sz = SwatchStripView.size
+        var y = r.minY - sz.height - 2
+        if y < 2 { y = r.maxY + 2 }
+        strip.frame = NSRect(x: r.minX + 96, y: y, width: sz.width, height: sz.height)
+        row.previewColor(previewHex)
+    }
+
+    /// Removes the strip; the row keeps `restoreHex` (saved or original color).
+    func hideSwatches(restoreHex: String?) {
+        swatch?.removeFromSuperview()
+        swatch = nil
+        selectedRowView()?.previewColor(restoreHex)
+    }
     func endRename(showing name: String?) { selectedRowView()?.endEdit(showing: name) }
 
     func model(at globalIdx: Int) -> WindowModel? {
@@ -675,6 +722,10 @@ final class SwitcherSession {
     private var eHold: DispatchWorkItem?
     private var eHoldFired = false
     private var renameEditor: RenameEditor?
+    /// Color being picked in the editor ("#RRGGBB" or "" = none) and whether
+    /// ⇥ moved keyboard focus from the name to the swatch strip.
+    private var renameColor = ""
+    private var renameColorFocus = false
     private static let maxAliasLength = 24
 
     /// Last committed window — the quick double-press re-targets it.
@@ -927,7 +978,7 @@ final class SwitcherSession {
         }
         panel.show(rows, query: searchQuery, headers: headers)
         if selectFirst { panel.setSelection(0) }
-        if let ed = renameEditor { panel.beginRename(ed) }
+        if renameEditor != nil { applyRenameUI() }
         return true
     }
 
@@ -1004,6 +1055,7 @@ final class SwitcherSession {
         eHold?.cancel()
         eHold = nil
         eHoldFired = false
+        if renameEditor != nil { panel.hideSwatches(restoreHex: panel.selectedModel?.colorHex) }
         renameEditor = nil
         let target = panel.selectedModel
         isOpen = false
@@ -1235,10 +1287,35 @@ final class SwitcherSession {
 
     private func beginRenameSelected() {
         guard let target = panel.selectedModel, !target.bundleId.isEmpty else { return }
-        let ed = RenameEditor(target.alias ?? target.appLocalName)
-        renameEditor = ed
-        panel.beginRename(ed)
+        renameEditor = RenameEditor(target.alias ?? target.appLocalName)
+        renameColor = target.colorHex ?? ""
+        renameColorFocus = false
+        applyRenameUI()
         print("panel: rename begin [\(target.appLocalName)] \"\(target.title)\"")
+    }
+
+    private func applyRenameUI() {
+        guard let ed = renameEditor else { return }
+        panel.beginRename(ed)
+        let idx: Int? = renameColor.isEmpty ? 0 : ColorTag.palette.firstIndex(of: renameColor).map { $0 + 1 }
+        panel.updateSwatches(selected: idx, focused: renameColorFocus,
+                             previewHex: renameColor.isEmpty ? nil : renameColor)
+    }
+
+    /// Keys while the swatch strip has focus: ←/→ step, 0–8 pick.
+    private func routeColorKey(kc: UInt32) {
+        var idx = renameColor.isEmpty ? 0 : (ColorTag.palette.firstIndex(of: renameColor).map { $0 + 1 } ?? 0)
+        let before = idx
+        switch kc {
+        case UInt32(kVK_LeftArrow): idx = max(0, idx - 1)
+        case UInt32(kVK_RightArrow): idx = min(ColorTag.palette.count, idx + 1)
+        case UInt32(kVK_ANSI_0): idx = 0
+        default:
+            if let d = Self.digitKeycodes[kc], d + 1 <= ColorTag.palette.count { idx = d + 1 }
+        }
+        guard idx != before || (!renameColor.isEmpty && ColorTag.palette.firstIndex(of: renameColor) == nil) else { return }
+        renameColor = idx == 0 ? "" : ColorTag.palette[idx - 1]
+        applyRenameUI()
     }
 
     /// Keys while editing: Return saves, Esc cancels; the rest is standard
@@ -1252,6 +1329,8 @@ final class SwitcherSession {
         if kc == UInt32(kVK_ANSI_E), eHoldFired { return true }
         if kc == UInt32(kVK_Return) || kc == UInt32(kVK_ANSI_KeypadEnter) { finishRename(save: true); return true }
         if kc == UInt32(kVK_Escape) { finishRename(save: false); return true }
+        if kc == UInt32(kVK_Tab) { renameColorFocus.toggle(); applyRenameUI(); return true }
+        if renameColorFocus { routeColorKey(kc: kc); return true }
 
         var carbon = HotkeyCenter.carbonFlags(fromCG: event.flags.intersection(HotkeyCenter.modifierBitsPublic))
         if holdSideBits != nil, let t = activeTrigger { carbon &= ~t.mods }   // trigger keys still down
@@ -1330,7 +1409,7 @@ final class SwitcherSession {
             return true
         }
         renameEditor = ed
-        panel.beginRename(ed)
+        applyRenameUI()
         return true
     }
 
@@ -1342,16 +1421,20 @@ final class SwitcherSession {
 
     private func finishRename(save: Bool) {
         guard let ed = renameEditor else { return }
+        let color = renameColor
         renameEditor = nil
+        renameColorFocus = false
         guard save, let target = panel.selectedModel else {
+            panel.hideSwatches(restoreHex: panel.selectedModel?.colorHex)
             panel.endRename(showing: nil)
             return
         }
         let alias = ed.text.trimmingCharacters(in: .whitespaces)
         let effective = alias == target.appLocalName ? "" : alias
-        PrefsStore.setAlias(bundleId: target.bundleId, title: target.title, alias: effective)
+        PrefsStore.setAppearance(bundleId: target.bundleId, title: target.title, alias: effective, color: color)
+        panel.hideSwatches(restoreHex: color.isEmpty ? nil : color)
         panel.endRename(showing: effective.isEmpty ? target.appLocalName : effective)
-        print("panel: rename → [\(target.appLocalName)] \"\(target.title)\" alias=\"\(effective)\"")
+        print("panel: rename → [\(target.appLocalName)] \"\(target.title)\" alias=\"\(effective)\" color=\(color)")
         WindowTracker.shared.refresh(reason: "alias")
     }
 

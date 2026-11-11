@@ -235,6 +235,8 @@ final class WindowTracker {
             for i in rows.indices {
                 rows[i].alias = PrefsStore.alias(
                     bundleId: rows[i].bundleId, appLocalName: rows[i].appLocalName, title: rows[i].title)
+                rows[i].colorHex = PrefsStore.color(
+                    bundleId: rows[i].bundleId, appLocalName: rows[i].appLocalName, title: rows[i].title)
             }
             DispatchQueue.main.async { [weak self] in
                 guard let self, gen == self.refreshGen else { return } // superseded sweep

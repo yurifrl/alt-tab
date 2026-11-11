@@ -20,6 +20,8 @@ struct WindowModel {
     /// drives the quick-go hint letter; search matches both it and the real
     /// name. `appLocalName` / `title` stay real: identity and matching use them.
     var alias: String? = nil
+    /// "#RRGGBB" color tag from a matching rule (nil = none).
+    var colorHex: String? = nil
     /// Window is in native fullscreen (its own Space) — kept by the
     /// "Visible Spaces (+ fullscreen)" scope even when offscreen.
     var fullscreen: Bool = false

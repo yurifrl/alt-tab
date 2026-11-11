@@ -304,6 +304,8 @@ enum PrefsStore {
         var pattern: String
         var hide: Bool
         var alias: String
+        /// "#RRGGBB" color tag, "" = none.
+        var color: String = ""
     }
 
     /// Persisted rule list. First read migrates the legacy "apps to not show"
@@ -315,7 +317,8 @@ enum PrefsStore {
                     WindowRule(bundleId: $0["bundleId"] as? String ?? "",
                                pattern: $0["pattern"] as? String ?? "",
                                hide: $0["hide"] as? Bool ?? false,
-                               alias: $0["alias"] as? String ?? "")
+                               alias: $0["alias"] as? String ?? "",
+                               color: $0["color"] as? String ?? "")
                 }
             }
             var migrated: [WindowRule] = []
@@ -335,7 +338,7 @@ enum PrefsStore {
     }
 
     private static func dict(_ r: WindowRule) -> [String: Any] {
-        ["bundleId": r.bundleId, "pattern": r.pattern, "hide": r.hide, "alias": r.alias]
+        ["bundleId": r.bundleId, "pattern": r.pattern, "hide": r.hide, "alias": r.alias, "color": r.color]
     }
 
     /// Rule match. Title patterns use the Contexts subset below. A pattern-less
@@ -365,17 +368,26 @@ enum PrefsStore {
         return (hits.first { !$0.pattern.isEmpty } ?? hits.first)?.alias
     }
 
-    /// Hold-E: set (or clear, with "") the alias of the exact-title rule under
-    /// the app. A rule left with no alias and no hide is dropped.
-    static func setAlias(bundleId: String, title: String, alias: String) {
+    /// Color tag of the best matching rule that has one (title-specific wins).
+    static func color(bundleId: String, appLocalName: String, title: String) -> String? {
+        let hits = windowRules.filter {
+            !$0.color.isEmpty && matches($0, bundleId: bundleId, appLocalName: appLocalName, title: title)
+        }
+        return (hits.first { !$0.pattern.isEmpty } ?? hits.first)?.color
+    }
+
+    /// Hold-E: set (or clear, with "") alias and color of the exact-title rule
+    /// under the app. A rule left with no alias, color or hide is dropped.
+    static func setAppearance(bundleId: String, title: String, alias: String, color: String) {
         guard !bundleId.isEmpty, !title.isEmpty else { return }
         let pattern = "=\(title)"
         var list = windowRules
         if let i = list.firstIndex(where: { $0.bundleId == bundleId && $0.pattern == pattern }) {
             list[i].alias = alias
-            if alias.isEmpty && !list[i].hide { list.remove(at: i) }
-        } else if !alias.isEmpty {
-            list.append(WindowRule(bundleId: bundleId, pattern: pattern, hide: false, alias: alias))
+            list[i].color = color
+            if alias.isEmpty && color.isEmpty && !list[i].hide { list.remove(at: i) }
+        } else if !alias.isEmpty || !color.isEmpty {
+            list.append(WindowRule(bundleId: bundleId, pattern: pattern, hide: false, alias: alias, color: color))
         }
         windowRules = list
     }
