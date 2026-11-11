@@ -42,6 +42,17 @@ final class HotkeyCenter {
     }
     private var terminationHooked = false
 
+    private var bindingWantsCmdTab = false
+    private var recordingCapture = false
+
+    /// While the prefs recorder is active, free Cmd+Tab/Cmd+Shift+Tab from the
+    /// system so the recorder can capture them; afterwards fall back to what
+    /// the live bindings need.
+    func setRecordingCapture(_ on: Bool) {
+        recordingCapture = on
+        setNativeCmdTab(disabled: on || bindingWantsCmdTab)
+    }
+
     /// Re-enable the system Cmd+Tab (call on quit).
     func restoreNativeCmdTab() { setNativeCmdTab(disabled: false) }
 
@@ -169,7 +180,8 @@ final class HotkeyCenter {
         let wantsCmdTab = newBindings.contains {
             $0.keyCode == UInt32(kVK_Tab) && $0.mods.contains(.maskCommand)
         }
-        setNativeCmdTab(disabled: wantsCmdTab)
+        bindingWantsCmdTab = wantsCmdTab
+        setNativeCmdTab(disabled: wantsCmdTab || recordingCapture)
 
         guard let newTap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,

@@ -670,6 +670,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
         // the recorder's local monitor needs them, and a recorded combo that
         // matches a live trigger must not be consumed by the tap first.
         HotkeyCenter.shared.suspended = true
+        HotkeyCenter.shared.setRecordingCapture(true)
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.recordingKind != nil else { return event }
             self.handleRecordedKey(event)
@@ -715,6 +716,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
         recordingKind = nil
         recordingIndex = nil
         HotkeyCenter.shared.suspended = false
+        HotkeyCenter.shared.setRecordingCapture(false)
         if built { syncFromStore() }
     }
 }
