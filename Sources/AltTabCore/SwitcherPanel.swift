@@ -672,7 +672,7 @@ final class SwitcherSession {
     private var hHoldFired = false
     /// Hold-E: rename the selected row's app label (alias). `renameEditor` is
     /// non-nil while editing; every key is routed to it until Return/Esc.
-    private var rHold: DispatchWorkItem?
+    private var eHold: DispatchWorkItem?
     private var eHoldFired = false
     private var renameEditor: RenameEditor?
     private static let maxAliasLength = 24
@@ -1001,8 +1001,8 @@ final class SwitcherSession {
         hHold?.cancel()
         hHold = nil
         hHoldFired = false
-        rHold?.cancel()
-        rHold = nil
+        eHold?.cancel()
+        eHold = nil
         eHoldFired = false
         renameEditor = nil
         let target = panel.selectedModel
@@ -1030,8 +1030,8 @@ final class SwitcherSession {
         let kc = UInt32(clamping: event.getIntegerValueField(.keyboardEventKeycode))
         if renameEditor != nil { return routeRenameKey(event, kc: kc) }
         // Hold-E: swallow R's autorepeat; another key first means a tap.
-        if kc == UInt32(kVK_ANSI_R), rHold != nil || eHoldFired { return true }
-        if rHold != nil { flushPendingE() }
+        if kc == UInt32(kVK_ANSI_E), eHold != nil || eHoldFired { return true }
+        if eHold != nil { flushPendingE() }
         // Hold-Q: swallow Q's autorepeat; any other key while Q is still
         // pending means it was a fast tap (rollover) → type the "q" first.
         if kc == UInt32(kVK_ANSI_Q), qHold != nil || qHoldFired {
@@ -1136,16 +1136,16 @@ final class SwitcherSession {
                 hHold = work
                 hHoldFired = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + Self.qHoldDelay, execute: work)
-            } else if kc == UInt32(kVK_ANSI_R), searchQuery.isEmpty,
+            } else if kc == UInt32(kVK_ANSI_E), searchQuery.isEmpty,
                       PrefsStore.typingStartsFastSearch,
                       Self.searchEligibleFlags(event.flags) {
                 let work = DispatchWorkItem { [weak self] in
-                    guard let self, self.isOpen, self.rHold != nil else { return }
-                    self.rHold = nil
+                    guard let self, self.isOpen, self.eHold != nil else { return }
+                    self.eHold = nil
                     self.eHoldFired = true
                     self.beginRenameSelected()
                 }
-                rHold = work
+                eHold = work
                 eHoldFired = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + Self.qHoldDelay, execute: work)
             } else if kc == UInt32(kVK_ANSI_I), searchQuery.isEmpty,
@@ -1191,8 +1191,8 @@ final class SwitcherSession {
     /// fired, swallow the release.
     private func routeKeyUp(_ event: CGEvent) -> Bool {
         let kc = UInt32(clamping: event.getIntegerValueField(.keyboardEventKeycode))
-        if kc == UInt32(kVK_ANSI_R) {
-            if rHold != nil { flushPendingE(); return true }
+        if kc == UInt32(kVK_ANSI_E) {
+            if eHold != nil { flushPendingE(); return true }
             if eHoldFired { eHoldFired = false; return true }
             return false
         }
@@ -1224,8 +1224,8 @@ final class SwitcherSession {
     }
 
     private func flushPendingE() {
-        rHold?.cancel()
-        rHold = nil
+        eHold?.cancel()
+        eHold = nil
         guard isOpen else { return }
         searchQuery.append("e")
         applyQuery()
@@ -1247,9 +1247,9 @@ final class SwitcherSession {
     /// don't count as shortcut modifiers. Unknown keys are swallowed.
     private func routeRenameKey(_ event: CGEvent, kc: UInt32) -> Bool {
         guard var ed = renameEditor else { return false }
-        // R is still physically down from the hold: swallow its autorepeat.
-        // Input starts once R is released (routeKeyUp clears eHoldFired).
-        if kc == UInt32(kVK_ANSI_R), eHoldFired { return true }
+        // E is still physically down from the hold: swallow its autorepeat.
+        // Input starts once E is released (routeKeyUp clears eHoldFired).
+        if kc == UInt32(kVK_ANSI_E), eHoldFired { return true }
         if kc == UInt32(kVK_Return) || kc == UInt32(kVK_ANSI_KeypadEnter) { finishRename(save: true); return true }
         if kc == UInt32(kVK_Escape) { finishRename(save: false); return true }
 
