@@ -365,7 +365,7 @@ enum PrefsStore {
         return (hits.first { !$0.pattern.isEmpty } ?? hits.first)?.alias
     }
 
-    /// Hold-R: set (or clear, with "") the alias of the exact-title rule under
+    /// Hold-E: set (or clear, with "") the alias of the exact-title rule under
     /// the app. A rule left with no alias and no hide is dropped.
     static func setAlias(bundleId: String, title: String, alias: String) {
         guard !bundleId.isEmpty, !title.isEmpty else { return }

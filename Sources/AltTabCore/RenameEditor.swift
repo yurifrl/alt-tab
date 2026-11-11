@@ -1,6 +1,6 @@
 import Foundation
 
-/// Single-line text model behind the hold-R rename: caret, "all selected"
+/// Single-line text model behind the hold-E rename: caret, "all selected"
 /// state, kill/word operations and undo/redo. Pure value type (no UI).
 struct RenameEditor {
     private(set) var text: String

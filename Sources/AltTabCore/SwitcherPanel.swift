@@ -66,7 +66,7 @@ final class PanelRowView: NSView {
     private var hintLetter = ""
     private var baseHintLetter = ""
     private var appNameText = ""
-    /// Hold-R rename in progress: app label shows the draft with a caret.
+    /// Hold-E rename in progress: app label shows the draft with a caret.
     private var editing = false
     /// Draft fully selected (just entered edit mode): next key replaces it.
     private var editAllSelected = false
@@ -180,7 +180,7 @@ final class PanelRowView: NSView {
         setHighlighted(false)
     }
 
-    /// Hold-R editor: the app label becomes `draft` + caret (underlined) and the
+    /// Hold-E editor: the app label becomes `draft` + caret (underlined) and the
     /// gutter letter previews the quick-go key the draft would give.
     func beginEdit(_ ed: RenameEditor) {
         editing = true
@@ -667,10 +667,10 @@ final class SwitcherSession {
     /// Hold-v shows/hides ignored windows for this session.
     private var vHold: DispatchWorkItem?
     private var vHoldFired = false
-    /// Hold-R: rename the selected row's app label (alias). `renameEditor` is
+    /// Hold-E: rename the selected row's app label (alias). `renameEditor` is
     /// non-nil while editing; every key is routed to it until Return/Esc.
     private var rHold: DispatchWorkItem?
-    private var rHoldFired = false
+    private var eHoldFired = false
     private var renameEditor: RenameEditor?
     private static let maxAliasLength = 24
 
@@ -997,7 +997,7 @@ final class SwitcherSession {
         vHoldFired = false
         rHold?.cancel()
         rHold = nil
-        rHoldFired = false
+        eHoldFired = false
         renameEditor = nil
         let target = panel.selectedModel
         isOpen = false
@@ -1023,9 +1023,9 @@ final class SwitcherSession {
     private func routeKey(_ event: CGEvent) -> Bool {
         let kc = UInt32(clamping: event.getIntegerValueField(.keyboardEventKeycode))
         if renameEditor != nil { return routeRenameKey(event, kc: kc) }
-        // Hold-R: swallow R's autorepeat; another key first means a tap.
-        if kc == UInt32(kVK_ANSI_R), rHold != nil || rHoldFired { return true }
-        if rHold != nil { flushPendingR() }
+        // Hold-E: swallow R's autorepeat; another key first means a tap.
+        if kc == UInt32(kVK_ANSI_R), rHold != nil || eHoldFired { return true }
+        if rHold != nil { flushPendingE() }
         // Hold-Q: swallow Q's autorepeat; any other key while Q is still
         // pending means it was a fast tap (rollover) → type the "q" first.
         if kc == UInt32(kVK_ANSI_Q), qHold != nil || qHoldFired {
@@ -1122,11 +1122,11 @@ final class SwitcherSession {
                 let work = DispatchWorkItem { [weak self] in
                     guard let self, self.isOpen, self.rHold != nil else { return }
                     self.rHold = nil
-                    self.rHoldFired = true
+                    self.eHoldFired = true
                     self.beginRenameSelected()
                 }
                 rHold = work
-                rHoldFired = false
+                eHoldFired = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + Self.qHoldDelay, execute: work)
             } else if kc == UInt32(kVK_ANSI_I), searchQuery.isEmpty,
                       PrefsStore.typingStartsFastSearch,
@@ -1172,8 +1172,8 @@ final class SwitcherSession {
     private func routeKeyUp(_ event: CGEvent) -> Bool {
         let kc = UInt32(clamping: event.getIntegerValueField(.keyboardEventKeycode))
         if kc == UInt32(kVK_ANSI_R) {
-            if rHold != nil { flushPendingR(); return true }
-            if rHoldFired { rHoldFired = false; return true }
+            if rHold != nil { flushPendingE(); return true }
+            if eHoldFired { eHoldFired = false; return true }
             return false
         }
         if kc == UInt32(kVK_ANSI_V) {
@@ -1198,15 +1198,15 @@ final class SwitcherSession {
         return false
     }
 
-    private func flushPendingR() {
+    private func flushPendingE() {
         rHold?.cancel()
         rHold = nil
         guard isOpen else { return }
-        searchQuery.append("r")
+        searchQuery.append("e")
         applyQuery()
     }
 
-    // MARK: Hold-R rename (alias for the app-name column)
+    // MARK: Hold-E rename (alias for the app-name column)
 
     private func beginRenameSelected() {
         guard let target = panel.selectedModel, !target.bundleId.isEmpty else { return }
@@ -1223,8 +1223,8 @@ final class SwitcherSession {
     private func routeRenameKey(_ event: CGEvent, kc: UInt32) -> Bool {
         guard var ed = renameEditor else { return false }
         // R is still physically down from the hold: swallow its autorepeat.
-        // Input starts once R is released (routeKeyUp clears rHoldFired).
-        if kc == UInt32(kVK_ANSI_R), rHoldFired { return true }
+        // Input starts once R is released (routeKeyUp clears eHoldFired).
+        if kc == UInt32(kVK_ANSI_R), eHoldFired { return true }
         if kc == UInt32(kVK_Return) || kc == UInt32(kVK_ANSI_KeypadEnter) { finishRename(save: true); return true }
         if kc == UInt32(kVK_Escape) { finishRename(save: false); return true }
 
