@@ -1,0 +1,12 @@
+version: '3'
+
+tasks:
+  build:
+    desc: Build the release binary
+    cmds:
+      - swift build -c release
+
+  install:
+    desc: Build release and assemble+sign AltTab.app into /Applications (-- -l links to ~/Applications instead)
+    cmds:
+      - ./make-app.sh {{.CLI_ARGS}}
