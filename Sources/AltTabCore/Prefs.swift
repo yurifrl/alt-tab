@@ -339,9 +339,23 @@ enum PrefsStore {
                                            hide: true, alias: ""))
             }
             d.set(migrated.map(dict), forKey: Key.windowRules)
+            // One source of truth from here on: drop the legacy lists.
+            d.removeObject(forKey: Key.workspaceExcludes)
+            d.removeObject(forKey: Key.workspaceTitleExcludes)
             return migrated
         }
-        set { d.set(newValue.map(dict), forKey: Key.windowRules) }
+        set {
+            d.set(newValue.map(dict), forKey: Key.windowRules)
+            NotificationCenter.default.post(name: windowRulesChanged, object: nil)
+        }
+    }
+
+    /// Posted after every write to `windowRules` (Preferences list reloads).
+    static let windowRulesChanged = Notification.Name("at.windowRulesChanged")
+
+    /// Rule match for a tracked window.
+    static func ruleMatches(_ r: WindowRule, window w: WindowModel) -> Bool {
+        matches(r, bundleId: w.bundleId, appLocalName: w.appLocalName, title: w.title)
     }
 
     private static func dict(_ r: WindowRule) -> [String: Any] {

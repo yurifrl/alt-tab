@@ -64,13 +64,9 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
     private let countHelp = NSTextField(wrappingLabelWithString: "With \"In One Group\" or \"Manually\" there's an option to show the Numbers Badge. When \"Manually\" is selected groups can also be renamed.")
     private let windowlessHelp = NSTextField(wrappingLabelWithString: "Shows apps for which there are no AX windows, e.g. apps with hidden or background-only windows.")
     private let ignoredHelp = NSTextField(wrappingLabelWithString: "Tab reaches the section after the active windows, and focusing an ignored window never changes the order. In the panel, hold I to ignore (or un-ignore) the selected window, and hold V to show or hide the section for this session.")
-    private let patternHelp = NSTextField(wrappingLabelWithString: "Each row targets an app, or only its windows whose title matches the Window Title Pattern (empty = all windows). Tick Hide to keep them out of the switcher; fill Alias to rename the app label for them (it sets their quick-go letter; search matches both names). Patterns: plain text for contains-matching, \"=\" for exact matches and \"^\"/\"$\" to anchor to the start/end of the title.")
-    private let excludeTable = NSTableView()
-    private let excludeScroll = NSScrollView()
-    private let plusButton = NSButton(title: "+", target: nil, action: nil)
-    private let minusButton = NSButton(title: "−", target: nil, action: nil)
-    private var excludeRows: [PrefsStore.WindowRule] = []
 
+    private let windowRulesView = WindowRulesView(frame: NSRect(x: 0, y: 0, width: 520, height: 560))
+    private var tabView: NSTabView?
     private var built = false
 
     override init(window: NSWindow?) {
@@ -97,6 +93,12 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
         prefsWindow.center()
         prefsWindow.makeKeyAndOrderFront(nil)
         if #available(macOS 14.0, *) { NSApp.activate() } else { NSApp.activate(ignoringOtherApps: true) }
+    }
+
+    /// Selects a tab by identifier ("Windows", "Rules", …) — used by the UI demo.
+    func showTab(_ id: String) {
+        buildIfNeeded()
+        tabView?.selectTabViewItem(withIdentifier: id)
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -225,29 +227,8 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
         groupSlider.widthAnchor.constraint(equalToConstant: 200).isActive = true
         groupSlider.target = self; groupSlider.action = #selector(groupCountSliderChanged(_:))
         windowlessPopup.target = self; windowlessPopup.action = #selector(policyChanged(_:))
-        plusButton.target = self; plusButton.action = #selector(addExclude(_:))
-        plusButton.bezelStyle = .smallSquare; plusButton.controlSize = .small
-        plusButton.widthAnchor.constraint(equalToConstant: 26).isActive = true
-        plusButton.toolTip = "Add an app rule"
-        minusButton.target = self; minusButton.action = #selector(removeExclude(_:))
-        minusButton.bezelStyle = .smallSquare; minusButton.controlSize = .small
-        minusButton.widthAnchor.constraint(equalToConstant: 26).isActive = true
-        minusButton.toolTip = "Remove the selected rule"
-        let appCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("app")); appCol.title = "App"; appCol.width = 170
-        let patCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("pattern")); patCol.title = "Window Title Pattern"
-        patCol.width = 150
-        let aliasCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("alias")); aliasCol.title = "Alias"; aliasCol.width = 130
-        let hideCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("hide")); hideCol.title = "Hide"; hideCol.width = 40
-        for c in [appCol, patCol, aliasCol, hideCol] { excludeTable.addTableColumn(c) }
-        excludeTable.dataSource = self; excludeTable.delegate = self
-        excludeTable.style = .plain
-        excludeTable.rowSizeStyle = .small
-        excludeScroll.documentView = excludeTable
-        excludeScroll.heightAnchor.constraint(equalToConstant: 160).isActive = true
-        excludeScroll.widthAnchor.constraint(equalToConstant: 540).isActive = true
         let groupRadios = NSStackView(views: [bySpaceRadio, oneGroupRadio, manuallyRadio])
         groupRadios.orientation = .vertical; groupRadios.alignment = .leading; groupRadios.spacing = 4
-        let minusRow = NSStackView(views: [plusButton, minusButton]); minusRow.spacing = 4
         let tickLabels = NSStackView(views: [label("1"), label("5"), label("9")])
         tickLabels.distribution = .fillEqually
         // Width comes from the grid: tickLabels shares groupSlider's column.
@@ -256,7 +237,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
         // NSInternalInconsistencyException, which AppKit's menu dispatch
         // swallows, silently abandoning the rest of buildIfNeeded.
         for c in tickLabels.arrangedSubviews { (c as? NSTextField)?.alignment = .center }
-        for h in [groupHelp, countHelp, windowlessHelp, patternHelp, delayHelp, ignoredHelp] {
+        for h in [groupHelp, countHelp, windowlessHelp, delayHelp, ignoredHelp] {
             h.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
             h.textColor = .secondaryLabelColor
             h.preferredMaxLayoutWidth = 340
@@ -269,9 +250,6 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
             [NSGridCell.emptyContentView, countHelp],
             [label("Apps without windows:"), windowlessPopup],
             [NSGridCell.emptyContentView, windowlessHelp],
-            [label("Window rules:"), excludeScroll],
-            [NSGridCell.emptyContentView, minusRow],
-            [NSGridCell.emptyContentView, patternHelp],
             [label("Show windows of:"), appsOfPopup],
             [label("Show windows from:"), spacePopup],
             [label("Order windows by:"), orderPopup],
@@ -286,9 +264,14 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
         }
 
         let tabs = NSTabView(frame: NSRect(x: 0, y: 0, width: 540, height: 360))
+        tabView = tabs
         tabs.addTabViewItem(tab("Command-Tab", cmdTabGrid))
         tabs.addTabViewItem(tab("Panel", panelGrid))
         tabs.addTabViewItem(tab("Rules", rulesGrid, height: 620))
+        let windowsItem = NSTabViewItem(identifier: "Windows")
+        windowsItem.label = "Windows"
+        windowsItem.view = windowRulesView
+        tabs.addTabViewItem(windowsItem)
         tabs.translatesAutoresizingMaskIntoConstraints = false
 
         let c = prefsWindow.contentView!
@@ -342,7 +325,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
         appsOfPopup.selectItem(at: PrefsStore.appsOfAll ? 0 : 1)
         orderPopup.selectItem(at: PrefsStore.orderByRecency ? 0 : 1)
         showIgnoredCheck.state = PrefsStore.showIgnored ? .on : .off
-        reloadExcludes()
+        windowRulesView.reload()
         bySpaceRadio.state = PrefsStore.grouping == .bySpace ? .on : .off
         oneGroupRadio.state = PrefsStore.grouping == .oneGroup ? .on : .off
         manuallyRadio.state = PrefsStore.grouping == .manually ? .on : .off
@@ -458,48 +441,8 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
     @objc private func groupCountSliderChanged(_ sender: NSSlider) {
         PrefsStore.groupCount = min(9, max(1, sender.integerValue))
     }
-    @objc private func addExclude(_ sender: NSButton) {
-        let menu = NSMenu()
-        let running = NSWorkspace.shared.runningApplications
-            .filter { $0.activationPolicy == .regular && $0.bundleIdentifier != nil }
-            .sorted { ($0.localizedName ?? "").localizedCaseInsensitiveCompare($1.localizedName ?? "") == .orderedAscending }
-        for a in running {
-            let item = NSMenuItem(title: a.localizedName ?? a.bundleIdentifier!, action: #selector(excludeAppPicked(_:)), keyEquivalent: "")
-            item.target = self
-            item.image = a.icon
-            item.representedObject = a.bundleIdentifier
-            menu.addItem(item)
-        }
-        guard !menu.items.isEmpty else { return }
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
-    }
-    @objc private func excludeAppPicked(_ sender: NSMenuItem) {
-        guard let bid = sender.representedObject as? String else { return }
-        excludeRows.append(PrefsStore.WindowRule(bundleId: bid, pattern: "", hide: true, alias: ""))
-        persistExcludes()
-        excludeTable.reloadData()
-    }
-    @objc private func removeExclude(_ sender: NSButton) {
-        let idx = excludeTable.selectedRow
-        guard idx >= 0, idx < excludeRows.count else { return }
-        excludeRows.remove(at: idx)
-        persistExcludes()
-        excludeTable.reloadData()
-    }
-
-    // MARK: - Exclude table
-
-    private func reloadExcludes() {
-        excludeRows = PrefsStore.windowRules
-        excludeTable.reloadData()
-    }
-    private func persistExcludes() {
-        PrefsStore.windowRules = excludeRows
-        WindowTracker.shared.refresh(reason: "excludes")
-    }
-
     func numberOfRows(in tableView: NSTableView) -> Int {
-        tableView === shortcutTable ? PrefsStore.shortcuts.count : excludeRows.count
+        PrefsStore.shortcuts.count
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
@@ -529,51 +472,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
             }
             return cell
         }
-        let id = tableColumn?.identifier.rawValue ?? ""
-        let cell = NSTableCellView()
-        if id == "hide" {
-            let box = NSButton(checkboxWithTitle: "", target: self, action: #selector(hideToggled(_:)))
-            box.tag = row
-            box.state = excludeRows[row].hide ? .on : .off
-            cell.addSubview(box)
-            box.translatesAutoresizingMaskIntoConstraints = false
-            NSLayoutConstraint.activate([
-                box.centerXAnchor.constraint(equalTo: cell.centerXAnchor),
-                box.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-            ])
-            return cell
-        }
-        let isApp = id == "app"
-        let text = isApp ? excludeRows[row].bundleId : (id == "alias" ? excludeRows[row].alias : excludeRows[row].pattern)
-        let field = NSTextField(string: text)
-        field.isBordered = false; field.drawsBackground = false
-        field.isEditable = !isApp; field.isSelectable = true
-        field.delegate = self
-        field.tag = row
-        field.identifier = tableColumn?.identifier
-        cell.addSubview(field)
-        field.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            field.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
-            field.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -2),
-            field.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-        ])
-        return cell
-    }
-
-    func controlTextDidEndEditing(_ obj: Notification) {
-        guard let field = obj.object as? NSTextField,
-              let id = field.identifier?.rawValue, id == "pattern" || id == "alias",
-              field.tag >= 0, field.tag < excludeRows.count else { return }
-        if id == "alias" { excludeRows[field.tag].alias = field.stringValue }
-        else { excludeRows[field.tag].pattern = field.stringValue }
-        persistExcludes()
-    }
-
-    @objc private func hideToggled(_ sender: NSButton) {
-        guard sender.tag >= 0, sender.tag < excludeRows.count else { return }
-        excludeRows[sender.tag].hide = sender.state == .on
-        persistExcludes()
+        return nil
     }
 
     // MARK: - Shortcut list actions

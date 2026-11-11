@@ -510,6 +510,21 @@ func runTrackDemo() {
 
 // MARK: - Prefs demo (Phase 5)
 
+/// Opens the Windows tab with sample rules (debug build: separate defaults
+/// domain) so the layout can be screenshotted: `AltTabCore prefs-ui`.
+func runPrefsUIDemo() {
+    NSApplication.shared.setActivationPolicy(.regular)
+    PrefsStore.windowRules = [
+        .init(bundleId: "com.google.Chrome", pattern: "=Google Cloud Platform - Google Chrome - Yuri (Nsx)", hide: false, alias: "Work Chrome", color: "#34d399"),
+        .init(bundleId: "com.google.Chrome", pattern: "Trail-code", hide: false, alias: "Personal Chrome", color: "#f97316"),
+        .init(bundleId: "com.google.Chrome", pattern: "^New Tab", hide: true, alias: "Dev Chrome", color: ""),
+        .init(bundleId: "com.apple.Terminal", pattern: "", hide: false, alias: "", color: "#a855f7"),
+    ]
+    PrefsWindowController.shared.showTab("Windows")
+    PrefsWindowController.shared.showWindow(nil)
+    NSApplication.shared.run()
+}
+
 func runPrefsDemo() {
     var failures: [String] = []
     for theme in PrefsStore.Theme.allCases {
@@ -668,6 +683,7 @@ case "hotkey":   runHotkeyDemo()
 case "panel":    runPanelDemo()
 case "track":    runTrackDemo()
 case "prefs":    runPrefsDemo()
+case "prefs-ui": runPrefsUIDemo()
 case "extras":   runExtrasDemo()
 case "run":      runAgent()
 default:
