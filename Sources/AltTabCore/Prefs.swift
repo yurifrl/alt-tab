@@ -2,7 +2,7 @@ import AppKit
 import Carbon.HIToolbox
 
 /// Preferences, namespaced `at.*`. Mirrors the Contexts option surface
-/// (Command-Tab, Panel, Number Switcher, Rules panes).
+/// (Command-Tab, Panel, Rules panes).
 /// Everything persisted; consumers read live on each use.
 enum PrefsStore {
     enum Theme: String, CaseIterable { case auto, vibrantLight, vibrantDark }
@@ -31,11 +31,6 @@ enum PrefsStore {
         static let shortcuts = "at.shortcuts.list"
         static let searchShortcuts = "at.search.shortcutsDepth" // 0=off,1,3,5
         static let searchMismatch = "at.search.allowMismatch"
-        static let numberInstantActivate = "at.number.instantActivate"
-        static let numberLeftCmd = "at.number.leftCmd"
-        static let numberRightCmd = "at.number.rightCmd"
-        static let numberLeftOpt = "at.number.leftOpt"
-        static let numberRightOpt = "at.number.rightOpt"
         static let workspaceExcludes = "at.workspaces.appExcludes"   // [String] bundle ids
         static let workspaceTitleExcludes = "at.workspaces.titleExcludes" // [String] "bundle|pattern"
         static let showWindowlessApps = "at.rules.showWindowlessApps"    // Bool
@@ -46,6 +41,8 @@ enum PrefsStore {
         static let scrollSelects = "at.panel.scrollSelects"
         static let spaceScope = "at.panel.spaceScope"
         static let minimizedPolicy = "at.panel.minimizedPolicy"
+        static let orderByRecency = "at.panel.orderByRecency"
+        static let showIgnored = "at.panel.showIgnored"
         static let hiddenPolicy = "at.panel.hiddenPolicy"
         static let windowlessPolicy = "at.panel.windowlessPolicy"
         static let appsOf = "at.panel.appsOf"        // all | active
@@ -195,44 +192,6 @@ enum PrefsStore {
         set { d.set(newValue, forKey: "at.search.lastQuery") }
     }
 
-    // MARK: Number switcher
-
-    static var numberInstantActivate: Bool {
-        get { d.object(forKey: Key.numberInstantActivate) as? Bool ?? true }
-        set { d.set(newValue, forKey: Key.numberInstantActivate) }
-    }
-
-    /// Side-mask bits (per-side scheme): leftCmd=1, rightCmd=2,
-    /// leftOpt=4, rightOpt=8 — sides are tracked from keycodes, not flags.
-    static var numberSideMask: UInt32 {
-        get { UInt32(d.integer(forKey: "at.number.modifierMask")) }
-        set { d.set(Int(newValue), forKey: "at.number.modifierMask") }
-    }
-
-    static var numberLeftCmd: Bool {
-        get { numberSideMask & 1 != 0 }
-        set { numberSideMask = toggledSide(numberSideMask, 1, newValue) }
-    }
-    static var numberRightCmd: Bool {
-        get { numberSideMask & 2 != 0 }
-        set { numberSideMask = toggledSide(numberSideMask, 2, newValue) }
-    }
-    static var numberLeftOpt: Bool {
-        get { numberSideMask & 4 != 0 }
-        set { numberSideMask = toggledSide(numberSideMask, 4, newValue) }
-    }
-    static var numberRightOpt: Bool {
-        get { numberSideMask & 8 != 0 }
-        set { numberSideMask = toggledSide(numberSideMask, 8, newValue) }
-    }
-    /// Side-mask currently held (HotkeyCenter keeps it fresh from keycodes).
-    static var numberModifierMask: UInt32 { numberSideMask }
-
-    /// Per-side toggle used by the Number Switcher prefs pane.
-    static func toggledSide(_ mask: UInt32, _ bit: UInt32, _ on: Bool) -> UInt32 {
-        on ? mask | bit : mask & ~bit
-    }
-
     // MARK: Panel policies
 
     static var spaceScope: SpaceScope {
@@ -243,6 +202,31 @@ enum PrefsStore {
     static var appsOfAll: Bool {
         get { d.string(forKey: Key.appsOf) != "active" }
         set { d.set(newValue ? "all" : "active", forKey: Key.appsOf) }
+    }
+
+    /// Order apps by most recent activation (default) instead of launch order.
+    static var orderByRecency: Bool {
+        get { d.object(forKey: Key.orderByRecency) as? Bool ?? true }
+        set { d.set(newValue, forKey: Key.orderByRecency) }
+    }
+
+    /// Show ignored (excluded) windows at the bottom of the panel. Tab cycling
+    /// skips them and focusing one never changes the recency order.
+    static var showIgnored: Bool {
+        get { d.bool(forKey: Key.showIgnored) }
+        set { d.set(newValue, forKey: Key.showIgnored) }
+    }
+
+    /// Hold-i: ignore the window by exact title under its app (toggles off if
+    /// that exact rule already exists). Returns true when the rule set changed.
+    @discardableResult
+    static func toggleIgnore(bundleId: String, title: String) -> Bool {
+        guard !bundleId.isEmpty, !title.isEmpty else { return false }
+        let entry = "\(bundleId)|=\(title)"
+        var list = titleExcludes
+        if let i = list.firstIndex(of: entry) { list.remove(at: i) } else { list.append(entry) }
+        titleExcludes = list
+        return true
     }
 
     static var minimizedPolicy: WindowPolicy {

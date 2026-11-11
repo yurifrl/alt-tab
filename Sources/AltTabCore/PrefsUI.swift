@@ -46,22 +46,18 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
     private let shortcutsPopup = NSPopUpButton(frame: .zero)
     private let mismatchCheck = NSButton(checkboxWithTitle: "Allow mismatch (fuzzy subsequence matching)", target: nil, action: nil)
 
-    // Number pane
-    private let digitsCheck = NSButton(checkboxWithTitle: "Typing a number instantly activates that window", target: nil, action: nil)
-    private let leftCmdCheck = NSButton(checkboxWithTitle: "Left ⌘", target: nil, action: nil)
-    private let rightCmdCheck = NSButton(checkboxWithTitle: "Right ⌘", target: nil, action: nil)
-    private let leftOptCheck = NSButton(checkboxWithTitle: "Left ⌥", target: nil, action: nil)
-    private let rightOptCheck = NSButton(checkboxWithTitle: "Right ⌥", target: nil, action: nil)
 
     // Rules pane
     private let appsOfPopup = NSPopUpButton(frame: .zero)
+    private let orderPopup = NSPopUpButton(frame: .zero)
+    private let showIgnoredCheck = NSButton(checkboxWithTitle: "Show ignored windows at the bottom (skipped by Tab, never reorder). Hold I on a row to ignore it.", target: nil, action: nil)
     private let spacePopup = NSPopUpButton(frame: .zero)
     private let bySpaceRadio = NSButton(radioButtonWithTitle: "By Space", target: nil, action: nil)
     private let oneGroupRadio = NSButton(radioButtonWithTitle: "In One Group", target: nil, action: nil)
     private let manuallyRadio = NSButton(radioButtonWithTitle: "Manually", target: nil, action: nil)
     private let groupSlider = NSSlider(value: 5, minValue: 1, maxValue: 9, target: nil, action: nil)
     private let windowlessPopup = NSPopUpButton(frame: .zero)
-    private let groupHelp = NSTextField(wrappingLabelWithString: "This applies to Sidebar, Number Switcher and Gesture Switcher. Command-Tab has its own separate options. When set to Manually, new apps & windows are distributed across groups; but you can re-order them or move them between groups by drag & drop and reserve spots for apps from the right-click menu.")
+    private let groupHelp = NSTextField(wrappingLabelWithString: "This applies to Sidebar and Gesture Switcher. Command-Tab has its own separate options. When set to Manually, new apps & windows are distributed across groups; but you can re-order them or move them between groups by drag & drop and reserve spots for apps from the right-click menu.")
     private let countHelp = NSTextField(wrappingLabelWithString: "With \"In One Group\" or \"Manually\" there's an option to show the Numbers Badge. When \"Manually\" is selected groups can also be renamed.")
     private let windowlessHelp = NSTextField(wrappingLabelWithString: "Shows apps for which there are no AX windows, e.g. apps with hidden or background-only windows.")
     private let patternHelp = NSTextField(wrappingLabelWithString: "Window Title Patterns can be used to hide specific windows of an app. Use plain text for contains-matching, \"=\" for exact matches and \"^\"/\"$\" to anchor to the start/end of the title.")
@@ -203,21 +199,12 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
             [NSGridCell.emptyContentView, scrollCheck],
         ])
 
-        // Number pane ----------------------------------------------------------
-        digitsCheck.target = self; digitsCheck.action = #selector(digitsToggled(_:))
-        for c in [leftCmdCheck, rightCmdCheck, leftOptCheck, rightOptCheck] {
-            c.target = self; c.action = #selector(numberSideToggled(_:))
-        }
-        let sidesRow = NSStackView(views: [leftCmdCheck, rightCmdCheck, leftOptCheck, rightOptCheck])
-        sidesRow.orientation = .horizontal; sidesRow.spacing = 12
-        let numberGrid = NSGridView(views: [
-            [NSGridCell.emptyContentView, digitsCheck],
-            [label("Switch numbers with:"), sidesRow],
-        ])
-
         // Rules pane -----------------------------------------------------------
         appsOfPopup.addItems(withTitles: ["Windows of all apps", "Windows of the active app only"])
         appsOfPopup.target = self; appsOfPopup.action = #selector(appsOfChanged(_:))
+        orderPopup.addItems(withTitles: ["Most recently used", "Application launch order"])
+        showIgnoredCheck.target = self; showIgnoredCheck.action = #selector(showIgnoredToggled(_:))
+        orderPopup.target = self; orderPopup.action = #selector(orderChanged(_:))
         spacePopup.addItems(withTitles: ["All Spaces", "Visible Spaces (+ fullscreen)", "Visible Spaces"])
         spacePopup.target = self; spacePopup.action = #selector(spaceChanged(_:))
         for r in [bySpaceRadio, oneGroupRadio, manuallyRadio] {
@@ -273,9 +260,11 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
             [NSGridCell.emptyContentView, patternHelp],
             [label("Show windows of:"), appsOfPopup],
             [label("Show windows from:"), spacePopup],
+            [label("Order windows by:"), orderPopup],
+            [NSGridCell.emptyContentView, showIgnoredCheck],
         ])
 
-        for grid in [cmdTabGrid, panelGrid, numberGrid, rulesGrid] {
+        for grid in [cmdTabGrid, panelGrid, rulesGrid] {
             grid.rowSpacing = 10
             grid.columnSpacing = 12
             grid.column(at: 0).xPlacement = .trailing
@@ -284,7 +273,6 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
         let tabs = NSTabView(frame: NSRect(x: 0, y: 0, width: 540, height: 360))
         tabs.addTabViewItem(tab("Command-Tab", cmdTabGrid))
         tabs.addTabViewItem(tab("Panel", panelGrid))
-        tabs.addTabViewItem(tab("Number Switcher", numberGrid))
         tabs.addTabViewItem(tab("Rules", rulesGrid, height: 575))
         tabs.translatesAutoresizingMaskIntoConstraints = false
 
@@ -334,14 +322,9 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
         mismatchCheck.state = PrefsStore.searchAllowMismatch ? .on : .off
         shortcutsPopup.selectItem(at: [0, 1, 3, 5].firstIndex(of: PrefsStore.searchShortcutsDepth) ?? 0)
 
-        digitsCheck.state = PrefsStore.numberInstantActivate ? .on : .off
-        let sides = PrefsStore.numberSideMask
-        leftCmdCheck.state = sides & 1 != 0 ? .on : .off
-        rightCmdCheck.state = sides & 2 != 0 ? .on : .off
-        leftOptCheck.state = sides & 4 != 0 ? .on : .off
-        rightOptCheck.state = sides & 8 != 0 ? .on : .off
-
         appsOfPopup.selectItem(at: PrefsStore.appsOfAll ? 0 : 1)
+        orderPopup.selectItem(at: PrefsStore.orderByRecency ? 0 : 1)
+        showIgnoredCheck.state = PrefsStore.showIgnored ? .on : .off
         reloadExcludes()
         bySpaceRadio.state = PrefsStore.grouping == .bySpace ? .on : .off
         oneGroupRadio.state = PrefsStore.grouping == .oneGroup ? .on : .off
@@ -439,17 +422,11 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
         PrefsStore.searchShortcutsDepth = [0, 1, 3, 5][sender.indexOfSelectedItem]
     }
 
-    @objc private func digitsToggled(_ sender: NSButton) { PrefsStore.numberInstantActivate = sender.state == .on }
-    @objc private func numberSideToggled(_ sender: NSButton) {
-        let sides = PrefsStore.numberSideMask
-        var next = sides
-        if sender === leftCmdCheck { next = PrefsStore.toggledSide(next, 1, sender.state == .on) }
-        if sender === rightCmdCheck { next = PrefsStore.toggledSide(next, 2, sender.state == .on) }
-        if sender === leftOptCheck { next = PrefsStore.toggledSide(next, 4, sender.state == .on) }
-        if sender === rightOptCheck { next = PrefsStore.toggledSide(next, 8, sender.state == .on) }
-        PrefsStore.numberSideMask = next
+    @objc private func showIgnoredToggled(_ sender: NSButton) {
+        PrefsStore.showIgnored = sender.state == .on
+        WindowTracker.shared.refresh(reason: "prefs:showIgnored")
     }
-
+    @objc private func orderChanged(_ sender: NSPopUpButton) { PrefsStore.orderByRecency = sender.indexOfSelectedItem == 0 }
     @objc private func appsOfChanged(_ sender: NSPopUpButton) { PrefsStore.appsOfAll = sender.indexOfSelectedItem == 0 }
     @objc private func groupingRadioChanged(_ sender: NSButton) {
         PrefsStore.grouping = sender === bySpaceRadio ? .bySpace : sender === oneGroupRadio ? .oneGroup : .manually

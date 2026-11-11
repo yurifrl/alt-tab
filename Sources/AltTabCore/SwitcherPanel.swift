@@ -165,9 +165,10 @@ final class PanelRowView: NSView {
         appName.stringValue = wm.appLocalName
         var text = wm.title
         if wm.minimized { text += "  (minimized)" }
+        if wm.ignored { text += "  (ignored)" }
         titleText = text
         titleMatches = query.isEmpty ? nil : SearchText.positions(in: text, query: query)
-        alphaValue = wm.minimized ? 0.55 : 1.0
+        alphaValue = wm.ignored ? 0.45 : (wm.minimized ? 0.55 : 1.0)
         applyIndicator()
         setHighlighted(false)
     }
@@ -526,9 +527,27 @@ final class SwitcherPanelController {
         screenPanels.forEach { $0.orderOut() }
     }
 
-    func moveSelection(_ delta: Int) {
+    /// `skipIgnored`: Tab-style cycling stays inside the rotation; arrows,
+    /// digits, hover and click can still reach ignored rows.
+    func moveSelection(_ delta: Int, skipIgnored: Bool = false) {
         guard !index.isEmpty else { return }
-        setSelection((selection + delta + index.count) % index.count)
+        let n = index.count
+        let step = delta < 0 ? -1 : 1
+        var next = (selection + delta + n) % n
+        if skipIgnored {
+            var tries = 0
+            while model(at: next)?.ignored == true, tries < n {
+                next = (next + step + n) % n
+                tries += 1
+            }
+            if model(at: next)?.ignored == true { return } // nothing in rotation
+        }
+        setSelection(next)
+    }
+
+    func model(at globalIdx: Int) -> WindowModel? {
+        guard index.indices.contains(globalIdx) else { return nil }
+        return screenPanels[index[globalIdx].panel].rows[index[globalIdx].row]
     }
 
     func setSelection(_ globalIdx: Int) {
@@ -593,6 +612,9 @@ final class SwitcherSession {
     private var qHold: DispatchWorkItem?
     private var qHoldFired = false
     private static let qHoldDelay: TimeInterval = 0.4
+    /// Hold-i ignores (or un-ignores) the selected window; a tap types "i".
+    private var iHold: DispatchWorkItem?
+    private var iHoldFired = false
     /// Last committed window — the quick double-press re-targets it.
     private var lastCommittedModel: WindowModel?
     /// Verification surface for per-display panel placement (Phase 4).
@@ -621,10 +643,6 @@ final class SwitcherSession {
         HotkeyCenter.shared.flagsChangedHandler = { [weak self] sideMask in
             guard let self else { return }
             self.routeHoldRelease(sideMask)
-        }
-        HotkeyCenter.shared.rawKeyHandler = { [weak self] event, sideMask in
-            guard let self else { return false }
-            return self.routeGlobalKey(event, sideMask: sideMask)
         }
     }
 
@@ -683,7 +701,9 @@ final class SwitcherSession {
         // and re-render on the next main-loop turn.
         searchQuery = ""
         let showed = renderFromTracker(selectFirst: true)
-        if selectNext { panel.moveSelection(1) }
+        // Current window ignored → it sits below the rotation, so row 0 is
+        // already the previously used window; don't step past it.
+        if selectNext, !WindowTracker.shared.focusedIsIgnored { panel.moveSelection(1, skipIgnored: true) }
         print("panel: opened rows=\(panel.rows.count) query=\"\(searchQuery)\" selectNext=\(selectNext)")
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -731,7 +751,7 @@ final class SwitcherSession {
             ?? PrefsStore.shortcuts.first(where: { $0.on })
         holdSideBits = HotkeyCenter.sideBits(fromCarbon: activeTrigger?.mods ?? 0)
         if isOpen {
-            panel.moveSelection(1)
+            panel.moveSelection(1, skipIgnored: true)
             return
         }
         if event.getIntegerValueField(.keyboardEventAutorepeat) != 0 {
@@ -786,7 +806,20 @@ final class SwitcherSession {
         // Focused app's windows first, AX order preserved within each app.
         let front = rows.filter { $0.pid == frontPid }
         let rest = rows.filter { $0.pid != frontPid }
-        rows = front + rest
+        if PrefsStore.orderByRecency {
+            // Per-window MRU; never-focused windows keep tracker order after
+            // the known ones (stable: offset breaks ties).
+            let recency = WindowTracker.shared.windowRecency
+            var rankOf: [String: Int] = [:]
+            for (i, k) in recency.enumerated() { rankOf[k] = i }
+            rows = rows.enumerated()
+                .sorted { (rankOf[$0.element.key] ?? Int.max, $0.offset) < (rankOf[$1.element.key] ?? Int.max, $1.offset) }
+                .map(\.element)
+        } else {
+            rows = front + rest
+        }
+        // Ignored windows sink below the rotation (stable partition).
+        rows = rows.filter { !$0.ignored } + rows.filter(\.ignored)
         topIsRemembered = false
         guard !searchQuery.isEmpty else { return rows }
         // Search ranks, never filters (Contexts): best match first, stable.
@@ -843,7 +876,12 @@ final class SwitcherSession {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             let rows = self.trackerRows()
-            guard let target = rows.dropFirst().first ?? rows.first else { return }
+            // Rotation only: skip ignored rows; if the current window is itself
+            // ignored, row 0 is already the previously used window.
+            let rotation = rows.filter { !$0.ignored }
+            let skipCurrent = !WindowTracker.shared.focusedIsIgnored
+            guard let target = (skipCurrent ? rotation.dropFirst().first : rotation.first) ?? rotation.first else { return }
+            WindowTracker.shared.commitFocus(target)
             self.lastCommittedPid = target.pid
             self.lastCommittedModel = target
             self.panel.onCommit?(target)
@@ -856,6 +894,7 @@ final class SwitcherSession {
     /// every later hotkey delivery. The panel is already hidden when this
     /// runs; only the activation is deferred.
     private func commitAsync(_ target: WindowModel) {
+        WindowTracker.shared.commitFocus(target)
         lastCommittedPid = target.pid
         lastCommittedModel = target
         DispatchQueue.main.async { [weak self] in
@@ -882,6 +921,9 @@ final class SwitcherSession {
         openTask = nil
         qHold?.cancel()
         qHold = nil
+        iHold?.cancel()
+        iHold = nil
+        iHoldFired = false
         let target = panel.selectedModel
         isOpen = false
         panel.hide()
@@ -911,6 +953,8 @@ final class SwitcherSession {
             return true
         }
         if qHold != nil { flushPendingQ() }
+        if kc == UInt32(kVK_ANSI_I), iHold != nil || iHoldFired { return true }
+        if iHold != nil { flushPendingI() }
         // In-panel action keys: modifier+letter acts on the selected row — only
         // before a query starts, so typing words never hides/quits an app.
         if searchQuery.isEmpty, let acted = Self.actionKey(of: event, mods: PrefsStore.actionQuitMods, letter: "q") {
@@ -944,7 +988,7 @@ final class SwitcherSession {
         let upCandidates = activeTrigger.map { [$0] } ?? PrefsStore.shortcuts.filter(\.on)
         for sc in upCandidates where sc.upMods != 0 {
             if kc == sc.upKey, eventMods & sc.upMods == sc.upMods {
-                panel.moveSelection(-1)
+                panel.moveSelection(-1, skipIgnored: true)
                 return true
             }
         }
@@ -959,7 +1003,7 @@ final class SwitcherSession {
                 if carbon != 0 { holdSideBits = HotkeyCenter.sideBits(fromCarbon: carbon) }
             }
             let back = event.flags.intersection(HotkeyCenter.modifierBitsPublic).contains(.maskShift)
-            panel.moveSelection(back ? -1 : 1)
+            panel.moveSelection(back ? -1 : 1, skipIgnored: true)
         case UInt32(kVK_UpArrow):
             panel.moveSelection(-1)
         case UInt32(kVK_DownArrow):
@@ -974,14 +1018,21 @@ final class SwitcherSession {
             applyQuery()
         default:
             if let idx = Self.digitKeycodes[kc] {
-                // Number switcher parity: flagless digit commits instantly; a
-                // digit pressed with any configured Number-switch modifier
-                // side also commits (Contexts "switch numbers with").
-                // Digit N selects row N (the "Numbers 1–9" gutter); "instantly
-                // activates" also commits, whatever modifiers the hold keeps down.
+                // Digit N selects row N (the "Numbers 1–9" gutter).
                 guard idx < panel.rows.count else { return true }
                 panel.setSelection(idx)
-                if PrefsStore.numberInstantActivate { close(commit: true) }
+            } else if kc == UInt32(kVK_ANSI_I), searchQuery.isEmpty,
+                      PrefsStore.typingStartsFastSearch,
+                      Self.searchEligibleFlags(event.flags) {
+                let work = DispatchWorkItem { [weak self] in
+                    guard let self, self.isOpen, self.iHold != nil else { return }
+                    self.iHold = nil
+                    self.iHoldFired = true
+                    self.toggleIgnoreSelected()
+                }
+                iHold = work
+                iHoldFired = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.qHoldDelay, execute: work)
             } else if kc == UInt32(kVK_ANSI_Q), searchQuery.isEmpty,
                       PrefsStore.typingStartsFastSearch,
                       Self.searchEligibleFlags(event.flags) {
@@ -1013,6 +1064,11 @@ final class SwitcherSession {
     /// fired, swallow the release.
     private func routeKeyUp(_ event: CGEvent) -> Bool {
         let kc = UInt32(clamping: event.getIntegerValueField(.keyboardEventKeycode))
+        if kc == UInt32(kVK_ANSI_I) {
+            if iHold != nil { flushPendingI(); return true }
+            if iHoldFired { iHoldFired = false; return true }
+            return false
+        }
         guard kc == UInt32(kVK_ANSI_Q) else { return false }
         if qHold != nil {
             flushPendingQ()
@@ -1023,6 +1079,23 @@ final class SwitcherSession {
             return true
         }
         return false
+    }
+
+    private func flushPendingI() {
+        iHold?.cancel()
+        iHold = nil
+        guard isOpen else { return }
+        searchQuery.append("i")
+        applyQuery()
+    }
+
+    /// Adds the selected window to Rules → Apps to not show (exact title under
+    /// its app), or removes that rule when it is already ignored.
+    private func toggleIgnoreSelected() {
+        guard let target = panel.selectedModel,
+              PrefsStore.toggleIgnore(bundleId: target.bundleId, title: target.title) else { return }
+        print("panel: ignore toggled → [\(target.appLocalName)] \"\(target.title)\"")
+        WindowTracker.shared.refresh(reason: "ignore")
     }
 
     /// Resolve a pending Q press as a tap: cancel the hold timer, type "q".
@@ -1075,32 +1148,6 @@ final class SwitcherSession {
             WindowTracker.shared.refresh(reason: "action")
             self.refreshRowsIfOpen()
         }
-    }
-
-    /// Global (panel-closed) route: number switcher digits under a held
-    /// side-mask.
-    private func routeGlobalKey(_ event: CGEvent, sideMask: UInt32) -> Bool {
-        let kc = UInt32(clamping: event.getIntegerValueField(.keyboardEventKeycode))
-        // Number switcher: held modifiers match the configured side-mask and
-        // the key is a digit row key.
-        let numberMask = PrefsStore.numberModifierMask
-        // Any checked side counts ("Switch numbers with: Left ⌘ / Right ⌘ …").
-        if numberMask != 0, sideMask & numberMask != 0, !isOpen,
-           let idx = Self.digitKeycodes[kc] {
-            // Same rows/order the panel numbers (apps scope, focused app first).
-            searchQuery = ""
-            let rows = trackerRows()
-            guard rows.indices.contains(idx) else { return false }
-            if PrefsStore.numberInstantActivate {
-                panel.onCommit?(rows[idx])
-            } else {
-                open()
-                panel.setSelection(idx)
-            }
-            print("number: digit \(idx + 1) → [\(rows[idx].appLocalName)]")
-            return true
-        }
-        return false
     }
 
     private func applyQuery() {

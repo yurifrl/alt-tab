@@ -13,6 +13,33 @@ final class WindowTracker {
     /// Observed window elements must outlive the observer registration.
     private var observedWindows: [pid_t: [AXUIElement]] = [:]
     private(set) var windows: [WindowModel] = []
+    /// Window keys by most recent focus (front = most recent). Per window, not
+    /// per app: focusing one Chrome window moves only that window.
+    private(set) var windowRecency: [String] = []
+    /// Key of the window that currently has focus (ignored ones included).
+    private(set) var focusedKey: String?
+    private var ignoredKeys: Set<String> = []
+    private var focusSuppressUntil = Date.distantPast
+
+    var focusedIsIgnored: Bool { focusedKey.map { ignoredKeys.contains($0) } ?? false }
+
+    /// Ignored windows are never bumped, so focusing them leaves order intact.
+    private func noteFocused(_ key: String) {
+        guard key != focusedKey else { return }
+        focusedKey = key
+        guard !ignoredKeys.contains(key) else { return }
+        windowRecency.removeAll { $0 == key }
+        windowRecency.insert(key, at: 0)
+        if windowRecency.count > 300 { windowRecency.removeLast(windowRecency.count - 300) }
+    }
+
+    /// Switcher commit: the target is authoritative. Observed focus can lag
+    /// and briefly report the app's previous window, so ignore observed
+    /// changes for a moment instead of letting them bump the wrong window.
+    func commitFocus(_ wm: WindowModel) {
+        noteFocused(wm.key)
+        focusSuppressUntil = Date().addingTimeInterval(0.8)
+    }
 
     /// Main-thread listeners, called after every model rebuild.
     private var changeHandlers: [String: () -> Void] = [:]
@@ -146,6 +173,14 @@ final class WindowTracker {
         refreshGen = gen
         sweepQueue.async { [weak self] in
             var rows = enumerateWindows()
+            // Focused window of the frontmost app → its model key.
+            var focused: String?
+            if let front = NSWorkspace.shared.frontmostApplication,
+               let fw = axCopy(AXUIElementCreateApplication(front.processIdentifier), kAXFocusedWindowAttribute),
+               CFGetTypeID(fw) == AXUIElementGetTypeID() {
+                let el = fw as! AXUIElement
+                focused = rows.first { $0.ax.map { CFEqual($0, el) } ?? false }?.key
+            }
             // Contexts filters, applied at model build time. Panel policies drive
             // the shared model; the switcher/session slices further by scope.
             if PrefsStore.hiddenPolicy == .doNotShow { rows.removeAll { $0.appHidden } }
@@ -185,12 +220,23 @@ final class WindowTracker {
             }
             // Rules excludes: one matcher, owned by the store (bundle rules +
             // per-app title patterns), applied to the whole model.
-            rows.removeAll { w in
-                PrefsStore.isExcluded(bundleId: w.bundleId, appLocalName: w.appLocalName, title: w.title)
+            // With "Show ignored windows" they stay, flagged, and sink in the panel.
+            let showIgnored = PrefsStore.showIgnored
+            if showIgnored {
+                for i in rows.indices {
+                    rows[i].ignored = PrefsStore.isExcluded(
+                        bundleId: rows[i].bundleId, appLocalName: rows[i].appLocalName, title: rows[i].title)
+                }
+            } else {
+                rows.removeAll { w in
+                    PrefsStore.isExcluded(bundleId: w.bundleId, appLocalName: w.appLocalName, title: w.title)
+                }
             }
             DispatchQueue.main.async { [weak self] in
                 guard let self, gen == self.refreshGen else { return } // superseded sweep
                 self.windows = rows
+                self.ignoredKeys = Set(rows.filter(\.ignored).map(\.key))
+                if let focused, Date() >= self.focusSuppressUntil { self.noteFocused(focused) }
                 let summary = self.windows.map { "\($0.pid):\($0.title.isEmpty ? "-" : $0.title)" }.joined(separator: " | ")
                 if summary != self.lastChangeLog {
                     self.lastChangeLog = summary

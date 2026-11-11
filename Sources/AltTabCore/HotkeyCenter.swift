@@ -43,11 +43,6 @@ final class HotkeyCenter {
     /// Optional first-pass consumer (panel key routing). Return true to consume.
     var interceptor: ((CGEvent) -> Bool)?
 
-    /// Second-pass consumer for tap-level features the panel does not own:
-    /// global number-switcher digits.
-    /// Return true to consume.
-    var rawKeyHandler: ((CGEvent, UInt32) -> Bool)?
-
     /// keyUp consumer (hold-vs-tap keys, e.g. hold Q to close a window).
     /// Return true to consume.
     var keyUpHandler: ((CGEvent) -> Bool)?
@@ -217,12 +212,6 @@ final class HotkeyCenter {
             if TapLog.on { TapLog.log("dispatch → binding hit id=\(b.id)") }
             b.handler(event)
             return nil // consume
-        }
-
-        // Tap-level extras: number switcher digits.
-        if rawKeyHandler?(event, sideMask) == true {
-            if TapLog.on { TapLog.log("dispatch → rawKeyHandler consumed") }
-            return nil
         }
 
         if TapLog.on { TapLog.log("dispatch → passthrough") }

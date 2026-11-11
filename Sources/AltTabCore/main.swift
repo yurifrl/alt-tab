@@ -19,7 +19,19 @@ struct WindowModel {
     /// Window is in native fullscreen (its own Space) — kept by the
     /// "Visible Spaces (+ fullscreen)" scope even when offscreen.
     var fullscreen: Bool = false
+    /// CGWindowID of the AX window (0 when unavailable): stable identity that
+    /// survives title changes, so two same-titled/renamed windows never merge.
+    var windowId: UInt32 = 0
+    /// Matches an Ignore rule: kept out of the MRU rotation. Only present in
+    /// the model when "Show ignored windows" is on; otherwise it is filtered.
+    var ignored: Bool = false
+
+    /// Identity for recency tracking.
+    var key: String { windowId != 0 ? "w\(windowId)" : "p\(pid):\(title)" }
 }
+
+@_silgen_name("_AXUIElementGetWindow")
+private func _AXUIElementGetWindow(_ element: AXUIElement, _ id: UnsafeMutablePointer<UInt32>) -> AXError
 
 private let axValueTypeId = AXValueGetTypeID()
 
@@ -144,7 +156,11 @@ func enumerateWindows() -> [WindowModel] {
                                    ax: w,
                                    appHidden: appHidden,
                                    windowless: false,
-                                   fullscreen: (axCopy(w, "AXFullScreen") as? Bool) ?? false))
+                                   fullscreen: (axCopy(w, "AXFullScreen") as? Bool) ?? false,
+                                   windowId: {
+                                       var id: UInt32 = 0
+                                       return _AXUIElementGetWindow(w, &id) == .success ? id : 0
+                                   }()))
             // Stash onscreen bit: encode via frame zero + onscreen check site later.
             if !onscreen { offscreenWindowKeys.insert(WindowKey(pid: app.processIdentifier, title: title, frame: frame)) }
             else { offscreenWindowKeys.remove(WindowKey(pid: app.processIdentifier, title: title, frame: frame)) }
