@@ -182,11 +182,11 @@ final class PanelRowView: NSView {
 
     /// Hold-R editor: the app label becomes `draft` + caret (underlined) and the
     /// gutter letter previews the quick-go key the draft would give.
-    func beginEdit(_ draft: String, allSelected: Bool = false) {
+    func beginEdit(_ ed: RenameEditor) {
         editing = true
-        editAllSelected = allSelected
-        appNameText = allSelected ? draft : draft + "\u{258F}"
-        hintLetter = draft.lowercased().first { $0.isLetter }.map { String($0) } ?? baseHintLetter
+        editAllSelected = ed.allSelected
+        appNameText = ed.display
+        hintLetter = ed.text.lowercased().first { $0.isLetter }.map { String($0) } ?? baseHintLetter
         applyIndicator()
         setHighlighted(isSelected)
     }
@@ -591,9 +591,7 @@ final class SwitcherPanelController {
         let views = screenPanels[i.panel].rowViews
         return views.indices.contains(i.row) ? views[i.row] : nil
     }
-    func beginRename(_ draft: String, allSelected: Bool = false) {
-        selectedRowView()?.beginEdit(draft, allSelected: allSelected)
-    }
+    func beginRename(_ editor: RenameEditor) { selectedRowView()?.beginEdit(editor) }
     func endRename(showing name: String?) { selectedRowView()?.endEdit(showing: name) }
 
     func model(at globalIdx: Int) -> WindowModel? {
@@ -669,13 +667,11 @@ final class SwitcherSession {
     /// Hold-v shows/hides ignored windows for this session.
     private var vHold: DispatchWorkItem?
     private var vHoldFired = false
-    /// Hold-R: rename the selected row's app label (alias). `renameDraft` is
+    /// Hold-R: rename the selected row's app label (alias). `renameEditor` is
     /// non-nil while editing; every key is routed to it until Return/Esc.
     private var rHold: DispatchWorkItem?
     private var rHoldFired = false
-    private var renameDraft: String?
-    /// Entered edit mode with the whole draft selected; first edit replaces it.
-    private var renameAllSelected = false
+    private var renameEditor: RenameEditor?
     private static let maxAliasLength = 24
 
     /// Last committed window — the quick double-press re-targets it.
@@ -841,7 +837,7 @@ final class SwitcherSession {
         guard let bits = holdSideBits, sideMask & bits == 0 else { return }
         holdSideBits = nil
         // Mid-rename: letting go of the trigger keys must not commit/close.
-        if renameDraft != nil { return }
+        if renameEditor != nil { return }
         if isOpen {
             print("panel: released trigger — committing selection")
             close(commit: true)
@@ -928,7 +924,7 @@ final class SwitcherSession {
         }
         panel.show(rows, query: searchQuery, headers: headers)
         if selectFirst { panel.setSelection(0) }
-        if let draft = renameDraft { panel.beginRename(draft, allSelected: renameAllSelected) }
+        if let ed = renameEditor { panel.beginRename(ed) }
         return true
     }
 
@@ -1002,7 +998,7 @@ final class SwitcherSession {
         rHold?.cancel()
         rHold = nil
         rHoldFired = false
-        renameDraft = nil
+        renameEditor = nil
         let target = panel.selectedModel
         isOpen = false
         panel.hide()
@@ -1026,7 +1022,7 @@ final class SwitcherSession {
 
     private func routeKey(_ event: CGEvent) -> Bool {
         let kc = UInt32(clamping: event.getIntegerValueField(.keyboardEventKeycode))
-        if renameDraft != nil { return routeRenameKey(event, kc: kc) }
+        if renameEditor != nil { return routeRenameKey(event, kc: kc) }
         // Hold-R: swallow R's autorepeat; another key first means a tap.
         if kc == UInt32(kVK_ANSI_R), rHold != nil || rHoldFired { return true }
         if rHold != nil { flushPendingR() }
@@ -1214,55 +1210,119 @@ final class SwitcherSession {
 
     private func beginRenameSelected() {
         guard let target = panel.selectedModel, !target.bundleId.isEmpty else { return }
-        let draft = target.alias ?? target.appLocalName
-        renameDraft = draft
-        renameAllSelected = true
-        panel.beginRename(draft, allSelected: true)
+        let ed = RenameEditor(target.alias ?? target.appLocalName)
+        renameEditor = ed
+        panel.beginRename(ed)
         print("panel: rename begin [\(target.appLocalName)] \"\(target.title)\"")
     }
 
-    /// Keys while editing: Return saves, Esc cancels, ⌫ deletes, printable
-    /// characters append. Everything else is swallowed (panel stays put).
+    /// Keys while editing: Return saves, Esc cancels; the rest is standard
+    /// text editing (arrows, ⌃A/E/B/F/D/H/K/U/W, ⌥←/→/⌫/D, ⌘←/→/⌫/A/Z/C/X/V,
+    /// ⌃Z undo, ⇧⌘Z / ⌃Y redo). Modifiers still held from opening the panel
+    /// don't count as shortcut modifiers. Unknown keys are swallowed.
     private func routeRenameKey(_ event: CGEvent, kc: UInt32) -> Bool {
-        guard var draft = renameDraft else { return false }
+        guard var ed = renameEditor else { return false }
         // R is still physically down from the hold: swallow its autorepeat.
         // Input starts once R is released (routeKeyUp clears rHoldFired).
         if kc == UInt32(kVK_ANSI_R), rHoldFired { return true }
-        switch kc {
-        case UInt32(kVK_Return), UInt32(kVK_ANSI_KeypadEnter):
-            finishRename(save: true)
+        if kc == UInt32(kVK_Return) || kc == UInt32(kVK_ANSI_KeypadEnter) { finishRename(save: true); return true }
+        if kc == UInt32(kVK_Escape) { finishRename(save: false); return true }
+
+        var carbon = HotkeyCenter.carbonFlags(fromCG: event.flags.intersection(HotkeyCenter.modifierBitsPublic))
+        if holdSideBits != nil, let t = activeTrigger { carbon &= ~t.mods }   // trigger keys still down
+        let ctrl = carbon & UInt32(controlKey) != 0, cmd = carbon & UInt32(cmdKey) != 0
+        let opt = carbon & UInt32(optionKey) != 0, shift = carbon & UInt32(shiftKey) != 0
+        let letter = Self.letterKeycodes[kc]
+        let max = Self.maxAliasLength
+
+        if !ctrl && !cmd && !opt {
+            switch kc {
+            case UInt32(kVK_LeftArrow): ed.moveLeft()
+            case UInt32(kVK_RightArrow): ed.moveRight()
+            case UInt32(kVK_Home): ed.moveToStart()
+            case UInt32(kVK_End): ed.moveToEnd()
+            case UInt32(kVK_Delete): ed.deleteBackward()
+            case UInt32(kVK_ForwardDelete): ed.deleteForward()
+            case UInt32(kVK_UpArrow): ed.moveToStart()
+            case UInt32(kVK_DownArrow): ed.moveToEnd()
+            default:
+                // Typing: with trigger modifiers held the event text is mangled
+                // (⌥ → "å"), so fall back to the physical letter.
+                let plain = event.flags.intersection(HotkeyCenter.modifierBitsPublic).subtracting(.maskShift).isEmpty
+                var ch: String?
+                if plain { ch = Self.character(of: event) }
+                else if let l = letter { ch = shift ? String(l).uppercased() : String(l) }
+                else if kc == 49 { ch = " " }
+                guard let c = ch, let u = c.unicodeScalars.first, u.value >= 32, u.value != 127,
+                      !(0xF700...0xF8FF).contains(u.value) else { return true }
+                ed.insert(c, maxLength: max)
+            }
+        } else if ctrl && !cmd && !opt {
+            switch letter {
+            case "a": ed.moveToStart()
+            case "e": ed.moveToEnd()
+            case "b": ed.moveLeft()
+            case "f": ed.moveRight()
+            case "d": ed.deleteForward()
+            case "h": ed.deleteBackward()
+            case "k": ed.killToEnd()
+            case "u": ed.killToStart()
+            case "w": ed.deleteWordBackward()
+            case "z": shift ? ed.redo() : ed.undo()
+            case "y": ed.redo()
+            default: return true
+            }
+        } else if cmd && !ctrl && !opt {
+            switch kc {
+            case UInt32(kVK_LeftArrow): ed.moveToStart()
+            case UInt32(kVK_RightArrow): ed.moveToEnd()
+            case UInt32(kVK_Delete): ed.killToStart()
+            default:
+                switch letter {
+                case "a": ed.selectAll()
+                case "z": shift ? ed.redo() : ed.undo()
+                case "c": Self.copyToPasteboard(ed.text)
+                case "x": Self.copyToPasteboard(ed.text); ed.selectAll(); ed.deleteBackward()   // no partial selection: cuts all
+                case "v": if let s = NSPasteboard.general.string(forType: .string) { ed.insert(s, maxLength: max) }
+                default: return true
+                }
+            }
+        } else if opt && !ctrl && !cmd {
+            switch kc {
+            case UInt32(kVK_LeftArrow): ed.moveWordLeft()
+            case UInt32(kVK_RightArrow): ed.moveWordRight()
+            case UInt32(kVK_Delete): ed.deleteWordBackward()
+            case UInt32(kVK_ForwardDelete): ed.deleteWordForward()
+            default:
+                switch letter {
+                case "b": ed.moveWordLeft()
+                case "f": ed.moveWordRight()
+                case "d": ed.deleteWordForward()
+                default: return true
+                }
+            }
+        } else {
             return true
-        case UInt32(kVK_Escape):
-            finishRename(save: false)
-            return true
-        case UInt32(kVK_Delete):
-            if renameAllSelected { draft = "" } else if !draft.isEmpty { draft.removeLast() }
-        default:
-            let mods = event.flags.intersection(HotkeyCenter.modifierBitsPublic)
-            let plain = mods.subtracting(.maskShift).isEmpty
-            var ch: String?
-            if plain { ch = Self.character(of: event) }
-            else if let l = Self.letterKeycodes[kc] { ch = String(l) }   // ⌥ would type "å"
-            else if kc == 49 { ch = " " }
-            guard let c = ch, let u = c.unicodeScalars.first, u.value >= 32, u.value != 127,
-                  !(0xF700...0xF8FF).contains(u.value),            // arrows/function keys
-                  renameAllSelected || draft.count < Self.maxAliasLength else { return true }
-            draft = renameAllSelected ? c : draft + c
         }
-        renameAllSelected = false
-        renameDraft = draft
-        panel.beginRename(draft)
+        renameEditor = ed
+        panel.beginRename(ed)
         return true
     }
 
+    private static func copyToPasteboard(_ s: String) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(s, forType: .string)
+    }
+
     private func finishRename(save: Bool) {
-        guard let draft = renameDraft else { return }
-        renameDraft = nil
+        guard let ed = renameEditor else { return }
+        renameEditor = nil
         guard save, let target = panel.selectedModel else {
             panel.endRename(showing: nil)
             return
         }
-        let alias = draft.trimmingCharacters(in: .whitespaces)
+        let alias = ed.text.trimmingCharacters(in: .whitespaces)
         let effective = alias == target.appLocalName ? "" : alias
         PrefsStore.setAlias(bundleId: target.bundleId, title: target.title, alias: effective)
         panel.endRename(showing: effective.isEmpty ? target.appLocalName : effective)
