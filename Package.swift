@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "alt-tab",
+    platforms: [.macOS(.v12)],
     targets: [
         .executableTarget(
             name: "AltTabCore",
