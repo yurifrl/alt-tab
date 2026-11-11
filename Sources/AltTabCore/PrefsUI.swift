@@ -34,7 +34,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
     private let rowsStepper = NSStepper(frame: .zero)
     private let widthField = NSTextField(frame: .zero)
     private let displayPopup = NSPopUpButton(frame: .zero)
-    private let delayCheck = NSButton(checkboxWithTitle: "Show Panel after a slight delay (tap and release quickly to switch to the last window)", target: nil, action: nil)
+    private let delayCheck = NSButton(checkboxWithTitle: "Show Panel after a slight delay", target: nil, action: nil)
     private let hoverCheck = NSButton(checkboxWithTitle: "Hovering a row selects it", target: nil, action: nil)
     private let ignoreMouseCheck = NSButton(checkboxWithTitle: "Ignore the mouse (no hover, click or scroll in the panel)", target: nil, action: nil)
     private let scrollCheck = NSButton(checkboxWithTitle: "Scroll wheel moves the selection", target: nil, action: nil)
@@ -58,6 +58,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
     private let manuallyRadio = NSButton(radioButtonWithTitle: "Manually", target: nil, action: nil)
     private let groupSlider = NSSlider(value: 5, minValue: 1, maxValue: 9, target: nil, action: nil)
     private let windowlessPopup = NSPopUpButton(frame: .zero)
+    private let delayHelp = NSTextField(wrappingLabelWithString: "Tap and release quickly to switch to the last window.")
     private let groupHelp = NSTextField(wrappingLabelWithString: "This applies to Sidebar and Gesture Switcher. Command-Tab has its own separate options. When set to Manually, new apps & windows are distributed across groups; but you can re-order them or move them between groups by drag & drop and reserve spots for apps from the right-click menu.")
     private let countHelp = NSTextField(wrappingLabelWithString: "With \"In One Group\" or \"Manually\" there's an option to show the Numbers Badge. When \"Manually\" is selected groups can also be renamed.")
     private let windowlessHelp = NSTextField(wrappingLabelWithString: "Shows apps for which there are no AX windows, e.g. apps with hidden or background-only windows.")
@@ -143,6 +144,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
         minusShortcut.target = self; minusShortcut.action = #selector(minusShortcutClicked(_:))
         moveDownHint.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
         moveDownHint.textColor = .secondaryLabelColor
+        moveDownHint.preferredMaxLayoutWidth = 180
 
         let actChipRow = NSStackView(views: [activateChip, activateClear]); actChipRow.spacing = 4
         let upChipRow = NSStackView(views: [moveUpChip, moveUpClear]); upChipRow.spacing = 4
@@ -169,6 +171,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
             [NSGridCell.emptyContentView, listRow],
             [NSGridCell.emptyContentView, plusRow],
             [NSGridCell.emptyContentView, delayCheck],
+            [NSGridCell.emptyContentView, delayHelp],
             [NSGridCell.emptyContentView, typingCheck],
             [label("Search Shortcuts:"), shortcutsPopup],
             [NSGridCell.emptyContentView, mismatchCheck],
@@ -247,9 +250,10 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
         // NSInternalInconsistencyException, which AppKit's menu dispatch
         // swallows, silently abandoning the rest of buildIfNeeded.
         for c in tickLabels.arrangedSubviews { (c as? NSTextField)?.alignment = .center }
-        for h in [groupHelp, countHelp, windowlessHelp, patternHelp, ignoredHelp] {
+        for h in [groupHelp, countHelp, windowlessHelp, patternHelp, delayHelp, ignoredHelp] {
             h.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
             h.textColor = .secondaryLabelColor
+            h.preferredMaxLayoutWidth = 340
         }
         let rulesGrid = NSGridView(views: [
             [label("Group windows:"), groupRadios],
@@ -278,7 +282,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
         let tabs = NSTabView(frame: NSRect(x: 0, y: 0, width: 540, height: 360))
         tabs.addTabViewItem(tab("Command-Tab", cmdTabGrid))
         tabs.addTabViewItem(tab("Panel", panelGrid))
-        tabs.addTabViewItem(tab("Rules", rulesGrid, height: 575))
+        tabs.addTabViewItem(tab("Rules", rulesGrid, height: 620))
         tabs.translatesAutoresizingMaskIntoConstraints = false
 
         let c = prefsWindow.contentView!
