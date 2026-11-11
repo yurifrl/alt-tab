@@ -36,6 +36,7 @@ enum PrefsStore {
         static let windowRules = "at.rules.windowRules"   // [[String: Any]] bundleId/pattern/hide/alias
         static let showWindowlessApps = "at.rules.showWindowlessApps"    // Bool
         static let panelDisplay = "at.panel.showOn"
+        static let activeDisplayOnly = "at.panel.activeDisplayOnly"
         static let panelWidth = "at.panel.width"
         static let panelDelay = "at.panel.showAfterDelay"
         static let hoverSelects = "at.panel.hoverSelects"
@@ -86,6 +87,12 @@ enum PrefsStore {
     static var panelShowDelay: Bool {
         get { d.object(forKey: Key.panelDelay) as? Bool ?? true }
         set { d.set(newValue, forKey: Key.panelDelay) }
+    }
+
+    /// List only windows on the display holding the mouse (minimized ones stay).
+    static var activeDisplayOnly: Bool {
+        get { d.bool(forKey: Key.activeDisplayOnly) }
+        set { d.set(newValue, forKey: Key.activeDisplayOnly) }
     }
 
     static var hoverSelects: Bool {

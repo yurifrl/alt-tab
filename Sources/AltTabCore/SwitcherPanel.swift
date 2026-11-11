@@ -528,6 +528,19 @@ final class SwitcherPanelController {
         // Kill previous overlays BEFORE replacing the array — otherwise every
         // open() leaks an NSPanel on screen that nothing can ever dismiss.
         screenPanels.forEach { $0.orderOut() }
+        var models = models
+        if PrefsStore.activeDisplayOnly, NSScreen.screens.count > 1 {
+            let mouse = NSEvent.mouseLocation
+            if let active = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) {
+                // Window frames are top-left-origin (AX); NSScreen is bottom-left.
+                let primaryH = NSScreen.screens.first(where: { $0.frame.origin == .zero })?.frame.height ?? active.frame.height
+                models = models.filter { wm in
+                    if wm.minimized { return true }
+                    let f = CGRect(x: wm.frame.minX, y: primaryH - wm.frame.maxY, width: wm.frame.width, height: wm.frame.height)
+                    return active.frame.intersects(f)
+                }
+            }
+        }
         rows = Array(models.prefix(min(Self.hardRowCap, PrefsStore.maxRows)))
         selection = 0
         index = []

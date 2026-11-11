@@ -35,6 +35,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
     private let widthField = NSTextField(frame: .zero)
     private let displayPopup = NSPopUpButton(frame: .zero)
     private let delayCheck = NSButton(checkboxWithTitle: "Show Panel after a slight delay", target: nil, action: nil)
+    private let activeOnlyCheck = NSButton(checkboxWithTitle: "List only windows on the display with the mouse", target: nil, action: nil)
     private let hoverCheck = NSButton(checkboxWithTitle: "Hovering a row selects it", target: nil, action: nil)
     private let ignoreMouseCheck = NSButton(checkboxWithTitle: "Ignore the mouse (no hover, click or scroll in the panel)", target: nil, action: nil)
     private let scrollCheck = NSButton(checkboxWithTitle: "Scroll wheel moves the selection", target: nil, action: nil)
@@ -185,6 +186,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
         widthField.target = self; widthField.action = #selector(widthEdited(_:))
         displayPopup.addItems(withTitles: ["On all displays", "Primary display only", "Display with mouse"])
         displayPopup.target = self; displayPopup.action = #selector(displayChanged(_:))
+        activeOnlyCheck.target = self; activeOnlyCheck.action = #selector(activeOnlyToggled(_:))
         hoverCheck.target = self; hoverCheck.action = #selector(hoverToggled(_:))
         scrollCheck.target = self; scrollCheck.action = #selector(scrollToggled(_:))
         ignoreMouseCheck.target = self; ignoreMouseCheck.action = #selector(ignoreMouseToggled(_:))
@@ -201,6 +203,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
             [label("Show on:"), displayPopup],
             [label("Minimized windows:"), minimizedPopup],
             [label("Hidden apps:"), hiddenPopup],
+            [NSGridCell.emptyContentView, activeOnlyCheck],
             [NSGridCell.emptyContentView, hoverCheck],
             [NSGridCell.emptyContentView, scrollCheck],
             [NSGridCell.emptyContentView, ignoreMouseCheck],
@@ -323,6 +326,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
         rowsStepper.integerValue = PrefsStore.maxRows
         widthField.integerValue = Int(PrefsStore.panelWidth)
         displayPopup.selectItem(at: PrefsStore.PanelDisplay.allCases.firstIndex(of: PrefsStore.panelDisplay) ?? 0)
+        activeOnlyCheck.state = PrefsStore.activeDisplayOnly ? .on : .off
         hoverCheck.state = PrefsStore.hoverSelects ? .on : .off
         scrollCheck.state = PrefsStore.scrollSelects ? .on : .off
         ignoreMouseCheck.state = PrefsStore.ignoreMouse ? .on : .off
@@ -409,6 +413,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
         PrefsStore.panelDisplay = PrefsStore.PanelDisplay.allCases[sender.indexOfSelectedItem]
     }
 
+    @objc private func activeOnlyToggled(_ sender: NSButton) { PrefsStore.activeDisplayOnly = sender.state == .on }
     @objc private func hoverToggled(_ sender: NSButton) { PrefsStore.hoverSelects = sender.state == .on }
     @objc private func scrollToggled(_ sender: NSButton) { PrefsStore.scrollSelects = sender.state == .on }
     @objc private func ignoreMouseToggled(_ sender: NSButton) { PrefsStore.ignoreMouse = sender.state == .on }
