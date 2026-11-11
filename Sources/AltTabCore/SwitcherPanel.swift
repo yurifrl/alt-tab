@@ -667,6 +667,9 @@ final class SwitcherSession {
     /// Hold-v shows/hides ignored windows for this session.
     private var vHold: DispatchWorkItem?
     private var vHoldFired = false
+    /// Hold-h hides the selected row's app (like ⌥H); a tap types "h".
+    private var hHold: DispatchWorkItem?
+    private var hHoldFired = false
     /// Hold-E: rename the selected row's app label (alias). `renameEditor` is
     /// non-nil while editing; every key is routed to it until Return/Esc.
     private var rHold: DispatchWorkItem?
@@ -995,6 +998,9 @@ final class SwitcherSession {
         vHold?.cancel()
         vHold = nil
         vHoldFired = false
+        hHold?.cancel()
+        hHold = nil
+        hHoldFired = false
         rHold?.cancel()
         rHold = nil
         eHoldFired = false
@@ -1036,6 +1042,8 @@ final class SwitcherSession {
         if iHold != nil { flushPendingI() }
         if kc == UInt32(kVK_ANSI_V), vHold != nil || vHoldFired { return true }
         if vHold != nil { flushPendingV() }
+        if kc == UInt32(kVK_ANSI_H), hHold != nil || hHoldFired { return true }
+        if hHold != nil { flushPendingH() }
         // In-panel action keys: modifier+letter acts on the selected row — only
         // before a query starts, so typing words never hides/quits an app.
         if searchQuery.isEmpty, let acted = Self.actionKey(of: event, mods: PrefsStore.actionQuitMods, letter: "q") {
@@ -1116,6 +1124,18 @@ final class SwitcherSession {
                 vHold = work
                 vHoldFired = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + Self.qHoldDelay, execute: work)
+            } else if kc == UInt32(kVK_ANSI_H), searchQuery.isEmpty,
+                      PrefsStore.typingStartsFastSearch,
+                      Self.searchEligibleFlags(event.flags) {
+                let work = DispatchWorkItem { [weak self] in
+                    guard let self, self.isOpen, self.hHold != nil else { return }
+                    self.hHold = nil
+                    self.hHoldFired = true
+                    self.actOnSelected(.hide)
+                }
+                hHold = work
+                hHoldFired = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.qHoldDelay, execute: work)
             } else if kc == UInt32(kVK_ANSI_R), searchQuery.isEmpty,
                       PrefsStore.typingStartsFastSearch,
                       Self.searchEligibleFlags(event.flags) {
@@ -1179,6 +1199,11 @@ final class SwitcherSession {
         if kc == UInt32(kVK_ANSI_V) {
             if vHold != nil { flushPendingV(); return true }
             if vHoldFired { vHoldFired = false; return true }
+            return false
+        }
+        if kc == UInt32(kVK_ANSI_H) {
+            if hHold != nil { flushPendingH(); return true }
+            if hHoldFired { hHoldFired = false; return true }
             return false
         }
         if kc == UInt32(kVK_ANSI_I) {
@@ -1335,6 +1360,14 @@ final class SwitcherSession {
         vHold = nil
         guard isOpen else { return }
         searchQuery.append("v")
+        applyQuery()
+    }
+
+    private func flushPendingH() {
+        hHold?.cancel()
+        hHold = nil
+        guard isOpen else { return }
+        searchQuery.append("h")
         applyQuery()
     }
 
