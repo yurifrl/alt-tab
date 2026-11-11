@@ -80,6 +80,10 @@ func axCopy(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? {
     return Unmanaged.passRetained(v).takeRetainedValue()
 }
 
+private let nonSwitchableSubroles: Set<String> = [
+    "AXFloatingWindow", "AXSystemFloatingWindow", "AXUnknown",
+]
+
 func enumerateWindows() -> [WindowModel] {
     guard AXIsProcessTrusted() else {
         print("AXIsProcessTrusted: false — grant Accessibility and retry")
@@ -133,7 +137,13 @@ func enumerateWindows() -> [WindowModel] {
         }
         let appHidden = app.isHidden
         for w in windows {
-            let title = axString(axCopy(w, kAXTitleAttribute)) ?? ""
+            // Floating bars/bubbles (Chrome's "Find in page", palettes) are
+            // listed by AX as windows but can't be focused as such.
+            if let sub = axString(axCopy(w, kAXSubroleAttribute)),
+               nonSwitchableSubroles.contains(sub) { continue }
+            // Titles can embed newlines (Chrome bubbles); keep rows single-line.
+            let title = (axString(axCopy(w, kAXTitleAttribute)) ?? "")
+                .components(separatedBy: .newlines).joined(separator: " ")
             // Accessory apps list utility surfaces too — untitled menu-bar
             // strips and overlay hooks (MenuBarAgent, Grammarly, TypeWhisper).
             // Keep only their titled, normal-level windows: menu-bar agents
