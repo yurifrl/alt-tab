@@ -1444,7 +1444,7 @@ final class SwitcherSession {
         }
         let alias = ed.text.trimmingCharacters(in: .whitespaces)
         let effective = alias == target.appLocalName ? "" : alias
-        PrefsStore.setAppearance(bundleId: target.bundleId, title: target.title, alias: effective, color: color)
+        PrefsStore.setAppearance(for: target, alias: effective, color: color)
         panel.hideSwatches(restoreHex: color.isEmpty ? nil : color)
         panel.endRename(showing: effective.isEmpty ? target.appLocalName : effective)
         print("panel: rename → [\(target.appLocalName)] \"\(target.title)\" alias=\"\(effective)\" color=\(color)")
@@ -1479,7 +1479,7 @@ final class SwitcherSession {
     /// its app), or removes that rule when it is already ignored.
     private func toggleIgnoreSelected() {
         guard let target = panel.selectedModel,
-              PrefsStore.toggleIgnore(bundleId: target.bundleId, title: target.title) else { return }
+              PrefsStore.toggleIgnore(target) else { return }
         print("panel: ignore toggled → [\(target.appLocalName)] \"\(target.title)\"")
         WindowTracker.shared.refresh(reason: "ignore")
     }

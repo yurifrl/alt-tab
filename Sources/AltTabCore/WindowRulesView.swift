@@ -15,6 +15,16 @@ enum AppInfo {
     }
 }
 
+/// Menu payload: an app and optionally one of its windows (id 0 = whole app).
+final class PinTarget: NSObject {
+    let bundleId: String
+    let windowId: UInt32
+    let title: String
+    init(bundleId: String, windowId: UInt32, title: String) {
+        self.bundleId = bundleId; self.windowId = windowId; self.title = title
+    }
+}
+
 /// "none" + palette dots; click to pick.
 final class ColorChoiceRow: NSView {
     var onChange: ((String) -> Void)?
@@ -75,10 +85,14 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     private let headerIcon = NSImageView()
     private let headerName = NSTextField(labelWithString: "")
     private let headerBundle = NSTextField(labelWithString: "")
-    private let appliesSeg = NSSegmentedControl(labels: ["All windows", "Title matches"], trackingMode: .selectOne, target: nil, action: nil)
+    private let appliesSeg = NSSegmentedControl(labels: ["This window", "Title matches", "All windows"], trackingMode: .selectOne, target: nil, action: nil)
     private let matchPopup = NSPopUpButton(frame: .zero)
     private let patternField = NSTextField()
     private let matchCount = NSTextField(labelWithString: "")
+    private let pinStatus = NSTextField(wrappingLabelWithString: "")
+    private let relinkButton = NSButton(title: "Pick from open windows ▾", target: nil, action: nil)
+    private var patternRowView: NSStackView?
+    private var pinRowView: NSStackView?
     private let aliasField = NSTextField()
     private let letterLabel = NSTextField(labelWithString: "")
     private let colors = ColorChoiceRow()
@@ -137,7 +151,7 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         appliesSeg.target = self; appliesSeg.action = #selector(appliesChanged(_:))
         appliesSeg.controlSize = .small
         appliesSeg.segmentStyle = .rounded
-        appliesSeg.setWidth(112, forSegment: 0); appliesSeg.setWidth(112, forSegment: 1)
+        for i in 0..<3 { appliesSeg.setWidth(98, forSegment: i) }
         matchPopup.addItems(withTitles: Self.matchKinds)
         matchPopup.controlSize = .small
         matchPopup.target = self; matchPopup.action = #selector(patternEdited(_:))
@@ -149,6 +163,9 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         patternField.placeholderString = "Window title"
         aliasField.placeholderString = "App name shown in the switcher"
         matchCount.font = .systemFont(ofSize: 11); matchCount.textColor = .secondaryLabelColor
+        pinStatus.font = .systemFont(ofSize: 11); pinStatus.maximumNumberOfLines = 3
+        relinkButton.target = self; relinkButton.action = #selector(relinkPressed(_:))
+        relinkButton.bezelStyle = .rounded; relinkButton.controlSize = .small
         letterLabel.font = .monospacedSystemFont(ofSize: 11, weight: .medium); letterLabel.textColor = .secondaryLabelColor
         colors.onChange = { [weak self] hex in self?.mutate { $0.color = hex } }
         hideSwitch.target = self; hideSwitch.action = #selector(hideToggled(_:))
@@ -164,11 +181,14 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
             let v = NSStackView(views: [headerName, headerBundle]); v.orientation = .vertical
             v.alignment = .leading; v.spacing = 1; return v }()], spacing: 10)
         let patternRow = row([matchPopup, patternField])
+        let pinRow = NSStackView(views: [pinStatus, relinkButton])
+        pinRow.orientation = .vertical; pinRow.alignment = .leading; pinRow.spacing = 6
+        patternRowView = patternRow; pinRowView = pinRow
         let aliasRow = row([aliasField, letterLabel])
         let hideRow = row([hideSwitch, NSTextField(labelWithString: "Hide from the switcher")], spacing: 8)
         let form = NSStackView(views: [
             header,
-            smallLabel("APPLIES TO"), appliesSeg, patternRow, matchCount,
+            smallLabel("APPLIES TO"), appliesSeg, pinRow, patternRow, matchCount,
             smallLabel("ALIAS"), aliasRow,
             smallLabel("COLOR"), colors,
             smallLabel("VISIBILITY"), hideRow,
@@ -225,6 +245,7 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
             matchPopup.widthAnchor.constraint(equalToConstant: 104),
             patternField.widthAnchor.constraint(equalToConstant: 190),
             aliasField.widthAnchor.constraint(equalToConstant: 226),
+            pinStatus.widthAnchor.constraint(equalToConstant: 290),
 
             previewTitle.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
             previewTitle.bottomAnchor.constraint(equalTo: previewHolder.topAnchor, constant: -6),
@@ -293,7 +314,7 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         }
     }
     private func composedPattern() -> String {
-        appliesSeg.selectedSegment == 0 ? "" :
+        appliesSeg.selectedSegment != 1 ? "" :
             Self.encode(kind: matchPopup.indexOfSelectedItem, text: patternField.stringValue)
     }
 
@@ -316,15 +337,26 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         headerName.stringValue = AppInfo.name(r.bundleId)
         headerBundle.stringValue = r.bundleId
         let d = Self.decode(r.pattern)
-        appliesSeg.selectedSegment = r.pattern.isEmpty ? 0 : 1
+        appliesSeg.selectedSegment = r.windowId != 0 ? 0 : (r.pattern.isEmpty ? 2 : 1)
         matchPopup.selectItem(at: d.kind)
         patternField.stringValue = d.text
-        let titleMode = appliesSeg.selectedSegment == 1
-        matchPopup.isEnabled = titleMode; patternField.isEnabled = titleMode
+        applyScopeVisibility()
         aliasField.stringValue = r.alias
         colors.value = r.color
         hideSwitch.state = r.hide ? .on : .off
         updateDynamic()
+    }
+
+    /// Pinned scope shows the window link row; title scope shows the pattern row.
+    private func applyScopeVisibility() {
+        let seg = appliesSeg.selectedSegment
+        pinRowView?.isHidden = seg != 0
+        patternRowView?.isHidden = seg != 1
+        matchCount.isHidden = seg == 0
+    }
+
+    private func isOpen(_ r: PrefsStore.WindowRule) -> WindowModel? {
+        WindowTracker.shared.windows.first { PrefsStore.ruleMatches(r, window: $0) }
     }
 
     /// Match count, quick-go letter and the preview row.
@@ -332,6 +364,15 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         guard let i = selected else { return }
         let r = rules[i]
         let n = WindowTracker.shared.windows.filter { PrefsStore.ruleMatches(r, window: $0) }.count
+        if r.windowId != 0 {
+            if let w = isOpen(r) {
+                pinStatus.stringValue = "● Open now — “\(w.title)”"
+                pinStatus.textColor = .systemGreen
+            } else {
+                pinStatus.stringValue = "○ Not open (closed, or its id changed) — re-link below.\nLast seen: “\(r.windowTitle)”"
+                pinStatus.textColor = .systemOrange
+            }
+        }
         matchCount.stringValue = n == 0 ? "No open windows match right now"
             : "✓ Matches \(n) open window\(n == 1 ? "" : "s") now"
         let name = r.alias.isEmpty ? AppInfo.name(r.bundleId) : r.alias
@@ -339,7 +380,8 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         letterLabel.stringValue = letter.map { "quick-go: \($0)" } ?? ""
 
         let live = WindowTracker.shared.windows.first { PrefsStore.ruleMatches(r, window: $0) }
-        let title = live?.title ?? (Self.decode(r.pattern).text.isEmpty ? "Window title" : Self.decode(r.pattern).text)
+        let fallback = r.windowId != 0 ? r.windowTitle : Self.decode(r.pattern).text
+        let title = live?.title ?? (fallback.isEmpty ? "Window title" : fallback)
         let pid = live?.pid ?? NSRunningApplication.runningApplications(withBundleIdentifier: r.bundleId).first?.processIdentifier ?? 0
         var wm = WindowModel(pid: pid, bundleId: r.bundleId, appLocalName: AppInfo.name(r.bundleId),
                              title: title, frame: .zero, minimized: false, ax: nil)
@@ -353,10 +395,68 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     // MARK: Actions
 
     @objc private func appliesChanged(_ sender: NSSegmentedControl) {
-        let titleMode = sender.selectedSegment == 1
-        matchPopup.isEnabled = titleMode; patternField.isEnabled = titleMode
-        mutate { $0.pattern = composedPattern() }
-        if titleMode { window?.makeFirstResponder(patternField) }
+        guard let i = selected else { return }
+        switch sender.selectedSegment {
+        case 0:
+            // Needs a window to pin to: ask now; cancelling snaps back.
+            if rules[i].windowId == 0 {
+                showWindowPicker(from: sender, forSelectedRule: true)
+                if selected.map({ rules[$0].windowId == 0 }) ?? true { loadDetail() }
+            }
+        case 1:
+            mutate { $0.windowId = 0; $0.windowTitle = ""; $0.pattern = composedPattern() }
+            applyScopeVisibility()
+            window?.makeFirstResponder(patternField)
+        default:
+            mutate { $0.windowId = 0; $0.windowTitle = ""; $0.pattern = "" }
+            applyScopeVisibility()
+        }
+        if let s = selected { _ = s; updateDynamic() }
+    }
+
+    @objc private func relinkPressed(_ sender: NSButton) {
+        showWindowPicker(from: sender, forSelectedRule: true)
+    }
+
+    /// Open windows of the rule's app first, every other app under "Other apps".
+    /// Picking pins the selected rule to that window (new id, same settings).
+    private func showWindowPicker(from view: NSView, forSelectedRule: Bool) {
+        guard let i = selected else { return }
+        let menu = NSMenu()
+        let same = WindowTracker.shared.windows.filter { $0.bundleId == rules[i].bundleId && !$0.title.isEmpty }
+        let others = WindowTracker.shared.windows.filter { $0.bundleId != rules[i].bundleId && !$0.title.isEmpty && !$0.bundleId.isEmpty }
+        let head = NSMenuItem(title: "Open \(AppInfo.name(rules[i].bundleId)) windows", action: nil, keyEquivalent: "")
+        head.isEnabled = false
+        menu.addItem(head)
+        if same.isEmpty {
+            let none = NSMenuItem(title: "None open", action: nil, keyEquivalent: ""); none.isEnabled = false
+            menu.addItem(none)
+        }
+        for w in same { menu.addItem(pinItem(w, showApp: false)) }
+        if !others.isEmpty {
+            menu.addItem(.separator())
+            let other = NSMenuItem(title: "Other apps", action: nil, keyEquivalent: "")
+            let sub = NSMenu()
+            for w in others { sub.addItem(pinItem(w, showApp: true)) }
+            other.submenu = sub
+            menu.addItem(other)
+        }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.height + 4), in: view)
+    }
+
+    private func pinItem(_ w: WindowModel, showApp: Bool) -> NSMenuItem {
+        let t = w.title.count > 52 ? String(w.title.prefix(52)) + "…" : w.title
+        let item = NSMenuItem(title: showApp ? "\(w.appLocalName) — \(t)" : t, action: #selector(pinPicked(_:)), keyEquivalent: "")
+        item.target = self
+        item.image = NSRunningApplication(processIdentifier: w.pid)?.icon.map { Self.small($0) }
+        item.representedObject = PinTarget(bundleId: w.bundleId, windowId: w.windowId, title: w.title)
+        return item
+    }
+
+    @objc private func pinPicked(_ sender: NSMenuItem) {
+        guard let t = sender.representedObject as? PinTarget, t.windowId != 0 else { return }
+        mutate { $0.bundleId = t.bundleId; $0.windowId = t.windowId; $0.windowTitle = t.title; $0.pattern = "" }
+        loadDetail()
     }
     @objc private func patternEdited(_ sender: Any?) { mutate { $0.pattern = composedPattern() } }
     @objc private func hideToggled(_ sender: NSSwitch) { mutate { $0.hide = sender.state == .on } }
@@ -387,7 +487,7 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
             let item = NSMenuItem(title: "\(w.appLocalName) — \(t)", action: #selector(addWindowPicked(_:)), keyEquivalent: "")
             item.target = self
             item.image = NSRunningApplication(processIdentifier: w.pid)?.icon.map { Self.small($0) }
-            item.representedObject = [w.bundleId, "=" + w.title]
+            item.representedObject = PinTarget(bundleId: w.bundleId, windowId: w.windowId, title: w.title)
             menu.addItem(item)
         }
         menu.addItem(.separator())
@@ -400,7 +500,7 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
             let item = NSMenuItem(title: a.localizedName ?? a.bundleIdentifier!, action: #selector(addWindowPicked(_:)), keyEquivalent: "")
             item.target = self
             item.image = a.icon.map { Self.small($0) }
-            item.representedObject = [a.bundleIdentifier!, ""]
+            item.representedObject = PinTarget(bundleId: a.bundleIdentifier!, windowId: 0, title: "")
             sub.addItem(item)
         }
         whole.submenu = sub
@@ -415,12 +515,16 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     }
 
     @objc private func addWindowPicked(_ sender: NSMenuItem) {
-        guard let pair = sender.representedObject as? [String], pair.count == 2 else { return }
-        if let existing = rules.firstIndex(where: { $0.bundleId == pair[0] && $0.pattern == pair[1] }) {
+        guard let t = sender.representedObject as? PinTarget else { return }
+        let pinned = t.windowId != 0
+        if let existing = rules.firstIndex(where: {
+            $0.bundleId == t.bundleId && (pinned ? $0.windowId == t.windowId : ($0.windowId == 0 && $0.pattern.isEmpty))
+        }) {
             table.selectRowIndexes([existing], byExtendingSelection: false)
             table.scrollRowToVisible(existing)
         } else {
-            rules.append(PrefsStore.WindowRule(bundleId: pair[0], pattern: pair[1], hide: false, alias: "", color: ""))
+            rules.append(PrefsStore.WindowRule(bundleId: t.bundleId, pattern: "", hide: false,
+                                               alias: "", color: "", windowId: t.windowId, windowTitle: t.title))
             PrefsStore.windowRules = rules
             table.reloadData()
             table.selectRowIndexes([rules.count - 1], byExtendingSelection: false)
@@ -449,8 +553,13 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         let title = NSTextField(labelWithString: r.alias.isEmpty ? AppInfo.name(r.bundleId) : r.alias)
         title.font = .systemFont(ofSize: 12.5, weight: .semibold)
         let d = Self.decode(r.pattern)
-        let scope = r.pattern.isEmpty ? "All windows"
-            : ["", "= ", "starts ", "ends "][d.kind] + "“\(d.text)”"
+        let scope: String
+        if r.windowId != 0 {
+            let open = WindowTracker.shared.windows.contains { PrefsStore.ruleMatches(r, window: $0) }
+            scope = "This window" + (open ? "" : " (not open)") + (r.windowTitle.isEmpty ? "" : " · “\(r.windowTitle)”")
+        } else {
+            scope = r.pattern.isEmpty ? "All windows" : ["", "= ", "starts ", "ends "][d.kind] + "“\(d.text)”"
+        }
         let sub = NSTextField(labelWithString: (r.alias.isEmpty ? scope : "\(AppInfo.name(r.bundleId)) · \(scope)"))
         sub.font = .systemFont(ofSize: 10.5); sub.textColor = .secondaryLabelColor
         for l in [title, sub] { l.lineBreakMode = .byTruncatingTail }

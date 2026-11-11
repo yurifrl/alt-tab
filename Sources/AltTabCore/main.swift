@@ -515,7 +515,7 @@ func runTrackDemo() {
 func runPrefsUIDemo() {
     NSApplication.shared.setActivationPolicy(.regular)
     PrefsStore.windowRules = [
-        .init(bundleId: "com.google.Chrome", pattern: "=Google Cloud Platform - Google Chrome - Yuri (Nsx)", hide: false, alias: "Work Chrome", color: "#34d399"),
+        .init(bundleId: "com.google.Chrome", pattern: "", hide: false, alias: "Work Chrome", color: "#34d399", windowId: 4821, windowTitle: "Google Cloud Platform - Google Chrome - Yuri (Nsx)"),
         .init(bundleId: "com.google.Chrome", pattern: "Trail-code", hide: false, alias: "Personal Chrome", color: "#f97316"),
         .init(bundleId: "com.google.Chrome", pattern: "^New Tab", hide: true, alias: "Dev Chrome", color: ""),
         .init(bundleId: "com.apple.Terminal", pattern: "", hide: false, alias: "", color: "#a855f7"),

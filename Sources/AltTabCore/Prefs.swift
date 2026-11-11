@@ -237,18 +237,19 @@ enum PrefsStore {
     static var sessionShowIgnored: Bool?
     static var showIgnoredNow: Bool { sessionShowIgnored ?? showIgnored }
 
-    /// Hold-i: hide the window by exact title under its app (toggles off if
-    /// that exact rule already hides it; a rule that also carries an alias is
-    /// kept, only its Hide flag flips). Returns true when the rule set changed.
+    /// Hold-i: hide the window (pinned to its window id, so tab/title changes
+    /// don't lose it); toggles off if that rule already hides it. A rule that
+    /// also carries an alias/color is kept, only its Hide flag flips.
     @discardableResult
-    static func toggleIgnore(bundleId: String, title: String) -> Bool {
-        guard !bundleId.isEmpty, !title.isEmpty else { return false }
-        let pattern = "=\(title)"
+    static func toggleIgnore(_ w: WindowModel) -> Bool {
+        guard !w.bundleId.isEmpty, !w.title.isEmpty else { return false }
         var list = windowRules
-        if let i = list.firstIndex(where: { $0.bundleId == bundleId && $0.pattern == pattern }) {
-            if list[i].hide && list[i].alias.isEmpty { list.remove(at: i) } else { list[i].hide.toggle() }
+        if let i = ruleIndex(in: list, for: w) {
+            if list[i].hide && list[i].alias.isEmpty && list[i].color.isEmpty { list.remove(at: i) } else { list[i].hide.toggle() }
         } else {
-            list.append(WindowRule(bundleId: bundleId, pattern: pattern, hide: true, alias: ""))
+            var r = pinnedRule(for: w, hide: true)
+            if w.windowId == 0 { r.pattern = "=\(w.title)"; r.windowTitle = "" }
+            list.append(r)
         }
         windowRules = list
         return true
@@ -313,6 +314,12 @@ enum PrefsStore {
         var alias: String
         /// "#RRGGBB" color tag, "" = none.
         var color: String = ""
+        /// CGWindowID this rule is pinned to (0 = not pinned; `pattern` is used).
+        /// Survives title/tab changes; lost when the window closes — re-link it
+        /// from Preferences ("Pick from open windows").
+        var windowId: UInt32 = 0
+        /// Title the pinned window had when linked (display only).
+        var windowTitle: String = ""
     }
 
     /// Persisted rule list. First read migrates the legacy "apps to not show"
@@ -325,7 +332,9 @@ enum PrefsStore {
                                pattern: $0["pattern"] as? String ?? "",
                                hide: $0["hide"] as? Bool ?? false,
                                alias: $0["alias"] as? String ?? "",
-                               color: $0["color"] as? String ?? "")
+                               color: $0["color"] as? String ?? "",
+                               windowId: ($0["windowId"] as? Int).map { UInt32(clamping: $0) } ?? 0,
+                               windowTitle: $0["windowTitle"] as? String ?? "")
                 }
             }
             var migrated: [WindowRule] = []
@@ -353,62 +362,69 @@ enum PrefsStore {
     /// Posted after every write to `windowRules` (Preferences list reloads).
     static let windowRulesChanged = Notification.Name("at.windowRulesChanged")
 
-    /// Rule match for a tracked window.
-    static func ruleMatches(_ r: WindowRule, window w: WindowModel) -> Bool {
-        matches(r, bundleId: w.bundleId, appLocalName: w.appLocalName, title: w.title)
-    }
-
     private static func dict(_ r: WindowRule) -> [String: Any] {
-        ["bundleId": r.bundleId, "pattern": r.pattern, "hide": r.hide, "alias": r.alias, "color": r.color]
+        ["bundleId": r.bundleId, "pattern": r.pattern, "hide": r.hide, "alias": r.alias, "color": r.color,
+         "windowId": Int(r.windowId), "windowTitle": r.windowTitle]
     }
 
-    /// Rule match. Title patterns use the subset below. A pattern-less
-    /// rule whose app id is not a bundle id (no ".") keeps the legacy loose
-    /// matching on the app's local name.
-    private static func matches(_ r: WindowRule, bundleId: String, appLocalName: String, title: String) -> Bool {
-        let appMatches = r.bundleId == bundleId
+    /// Rule match. A pinned rule matches only its window id (and app). Title
+    /// patterns use the subset below. A pattern-less rule whose app id is not
+    /// a bundle id (no ".") keeps the legacy loose matching on the app's name.
+    private static func matches(_ r: WindowRule, _ w: WindowModel) -> Bool {
+        if r.windowId != 0 { return w.windowId == r.windowId && r.bundleId == w.bundleId }
+        let appMatches = r.bundleId == w.bundleId
             || (r.pattern.isEmpty && !r.bundleId.contains(".") && !r.bundleId.isEmpty
-                && appLocalName.localizedCaseInsensitiveContains(r.bundleId))
+                && w.appLocalName.localizedCaseInsensitiveContains(r.bundleId))
         guard appMatches else { return false }
-        return r.pattern.isEmpty || titleMatches(title, r.pattern)
+        return r.pattern.isEmpty || titleMatches(w.title, r.pattern)
     }
+
+    /// Rule match for a tracked window.
+    static func ruleMatches(_ r: WindowRule, window w: WindowModel) -> Bool { matches(r, w) }
 
     /// True when the window must not appear per the Hide rules.
-    static func isExcluded(bundleId: String, appLocalName: String, title: String) -> Bool {
-        windowRules.contains {
-            $0.hide && matches($0, bundleId: bundleId, appLocalName: appLocalName, title: title)
-        }
+    static func isExcluded(_ w: WindowModel) -> Bool {
+        windowRules.contains { $0.hide && matches($0, w) }
     }
 
-    /// Alias of the best matching rule that has one (a title-specific rule
-    /// beats an app-wide one), else nil.
-    static func alias(bundleId: String, appLocalName: String, title: String) -> String? {
-        let hits = windowRules.filter {
-            !$0.alias.isEmpty && matches($0, bundleId: bundleId, appLocalName: appLocalName, title: title)
-        }
-        return (hits.first { !$0.pattern.isEmpty } ?? hits.first)?.alias
+    /// Best rule among those matching and having a value: pinned > title
+    /// pattern > app-wide.
+    private static func best(_ w: WindowModel, _ has: (WindowRule) -> Bool) -> WindowRule? {
+        let hits = windowRules.filter { has($0) && matches($0, w) }
+        return hits.first { $0.windowId != 0 } ?? hits.first { !$0.pattern.isEmpty } ?? hits.first
     }
 
-    /// Color tag of the best matching rule that has one (title-specific wins).
-    static func color(bundleId: String, appLocalName: String, title: String) -> String? {
-        let hits = windowRules.filter {
-            !$0.color.isEmpty && matches($0, bundleId: bundleId, appLocalName: appLocalName, title: title)
-        }
-        return (hits.first { !$0.pattern.isEmpty } ?? hits.first)?.color
+    static func alias(for w: WindowModel) -> String? { best(w) { !$0.alias.isEmpty }?.alias }
+    static func color(for w: WindowModel) -> String? { best(w) { !$0.color.isEmpty }?.color }
+
+    private static func pinnedRule(for w: WindowModel, hide: Bool = false) -> WindowRule {
+        WindowRule(bundleId: w.bundleId, pattern: "", hide: hide, alias: "", color: "",
+                   windowId: w.windowId, windowTitle: w.title)
     }
 
-    /// Hold-E: set (or clear, with "") alias and color of the exact-title rule
-    /// under the app. A rule left with no alias, color or hide is dropped.
-    static func setAppearance(bundleId: String, title: String, alias: String, color: String) {
-        guard !bundleId.isEmpty, !title.isEmpty else { return }
-        let pattern = "=\(title)"
+    /// The rule that targets exactly this window: pinned to its id, or (no id
+    /// available) the exact-title pattern.
+    private static func ruleIndex(in list: [WindowRule], for w: WindowModel) -> Int? {
+        if w.windowId != 0 {
+            return list.firstIndex { $0.bundleId == w.bundleId && $0.windowId == w.windowId }
+        }
+        return list.firstIndex { $0.bundleId == w.bundleId && $0.windowId == 0 && $0.pattern == "=\(w.title)" }
+    }
+
+    /// Hold-E: set (or clear, with "") alias and color of the rule pinned to
+    /// this window. A rule left with no alias, color or hide is dropped.
+    static func setAppearance(for w: WindowModel, alias: String, color: String) {
+        guard !w.bundleId.isEmpty, !w.title.isEmpty else { return }
         var list = windowRules
-        if let i = list.firstIndex(where: { $0.bundleId == bundleId && $0.pattern == pattern }) {
+        if let i = ruleIndex(in: list, for: w) {
             list[i].alias = alias
             list[i].color = color
             if alias.isEmpty && color.isEmpty && !list[i].hide { list.remove(at: i) }
         } else if !alias.isEmpty || !color.isEmpty {
-            list.append(WindowRule(bundleId: bundleId, pattern: pattern, hide: false, alias: alias, color: color))
+            var r = pinnedRule(for: w)
+            if w.windowId == 0 { r.pattern = "=\(w.title)"; r.windowTitle = "" }
+            r.alias = alias; r.color = color
+            list.append(r)
         }
         windowRules = list
     }
