@@ -16,6 +16,10 @@ struct WindowModel {
     var appHidden: Bool = false
     /// App has no windows of its own (Contexts "windowless apps" filter).
     var windowless: Bool = false
+    /// Rules alias for the app-name column (nil = show `appLocalName`). It
+    /// drives the quick-go hint letter; search matches both it and the real
+    /// name. `appLocalName` / `title` stay real: identity and matching use them.
+    var alias: String? = nil
     /// Window is in native fullscreen (its own Space) — kept by the
     /// "Visible Spaces (+ fullscreen)" scope even when offscreen.
     var fullscreen: Bool = false
@@ -27,6 +31,8 @@ struct WindowModel {
     var ignored: Bool = false
 
     /// Identity for recency tracking.
+    var displayName: String { alias ?? appLocalName }
+
     var key: String { windowId != 0 ? "w\(windowId)" : "p\(pid):\(title)" }
 }
 
@@ -540,12 +546,12 @@ func runExtrasDemo() {
     if SwitcherSession.shared.isOpen { SwitcherSession.shared.close(commit: false) }
 
     // Workspaces excludes: excluded bundle id never rendered.
-    PrefsStore.workspaceExcludes = ["com.google.Chrome"]
+    PrefsStore.windowRules = [PrefsStore.WindowRule(bundleId: "com.google.Chrome", pattern: "", hide: true, alias: "")]
     SwitcherSession.shared.openForTest()
     let chromeRows = SwitcherSession.shared.panelRows.filter { $0.bundleId == "com.google.Chrome" }
     if !chromeRows.isEmpty { failures.append("workspace exclude leaked \(chromeRows.count) rows") }
     if SwitcherSession.shared.isOpen { SwitcherSession.shared.close(commit: false) }
-    PrefsStore.workspaceExcludes = []
+    PrefsStore.windowRules = []
 
     // Gestures: private MultitouchSupport stack installs on the attached devices.
     let devices = GestureSwitch.shared.start()

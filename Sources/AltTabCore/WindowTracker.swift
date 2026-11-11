@@ -232,6 +232,10 @@ final class WindowTracker {
                     PrefsStore.isExcluded(bundleId: w.bundleId, appLocalName: w.appLocalName, title: w.title)
                 }
             }
+            for i in rows.indices {
+                rows[i].alias = PrefsStore.alias(
+                    bundleId: rows[i].bundleId, appLocalName: rows[i].appLocalName, title: rows[i].title)
+            }
             DispatchQueue.main.async { [weak self] in
                 guard let self, gen == self.refreshGen else { return } // superseded sweep
                 self.windows = rows
