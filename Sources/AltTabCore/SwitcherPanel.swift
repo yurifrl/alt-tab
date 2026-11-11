@@ -159,11 +159,11 @@ final class PanelRowView: NSView {
     func configure(_ wm: WindowModel, globalIndex idx: Int = -1, query: String = "", hint: Character? = nil) {
         globalIndex = idx
         hintLetter = hint.map { String($0) } ?? ""
-        appMatches = query.isEmpty ? nil : SearchText.positions(in: wm.appLocalName, query: query)
-        appNameText = wm.appLocalName
+        appMatches = query.isEmpty ? nil : SearchText.positions(in: wm.displayName, query: query)
+        appNameText = wm.displayName
         iconView.image = NSRunningApplication(processIdentifier: wm.pid)?.icon
-        appName.stringValue = wm.appLocalName
-        var text = wm.displayTitle
+        appName.stringValue = wm.displayName
+        var text = wm.title
         if wm.minimized { text += "  (minimized)" }
         if wm.ignored { text += "  (ignored)" }
         titleText = text
@@ -422,10 +422,10 @@ final class SwitcherPanelController {
         hintByIndex.firstIndex { $0 == ch }
     }
 
-    /// Unique letter per row: first free letter of the app name, then any
+    /// Unique letter per row: first letter of the displayed name (alias wins), then any
     /// free letter of the title, then any free letter at all.
     static func assignHints(_ models: [WindowModel]) -> [Character?] {
-        models.map { $0.appLocalName.lowercased().first { $0.isLetter } }
+        models.map { $0.displayName.lowercased().first { $0.isLetter } }
     }
 
     var onCommit: ((WindowModel) -> Void)?
@@ -828,7 +828,8 @@ final class SwitcherSession {
         // Search ranks, never filters (Contexts): best match first, stable.
         let q = searchQuery
         var ranked = rows.enumerated().map { (i: $0.offset, wm: $0.element,
-            sc: SearchText.score(app: $0.element.appLocalName, title: $0.element.displayTitle, query: q)) }
+            sc: max(SearchText.score(app: $0.element.displayName, title: $0.element.title, query: q),
+                SearchText.score(app: $0.element.appLocalName, title: "", query: q))) }
         ranked.sort { $0.sc != $1.sc ? $0.sc > $1.sc : $0.i < $1.i }
         rows = ranked.map(\.wm)
         // "Last Selected for 'q…'": the window committed last time for this query.

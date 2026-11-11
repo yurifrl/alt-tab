@@ -16,8 +16,9 @@ struct WindowModel {
     var appHidden: Bool = false
     /// App has no windows of its own (Contexts "windowless apps" filter).
     var windowless: Bool = false
-    /// Display name from a matching Rules alias (nil = show `title`). `title`
-    /// stays the real AX title: identity, activation and rule matching use it.
+    /// Rules alias for the app-name column (nil = show `appLocalName`). It
+    /// drives the quick-go hint letter; search matches both it and the real
+    /// name. `appLocalName` / `title` stay real: identity and matching use them.
     var alias: String? = nil
     /// Window is in native fullscreen (its own Space) — kept by the
     /// "Visible Spaces (+ fullscreen)" scope even when offscreen.
@@ -30,7 +31,7 @@ struct WindowModel {
     var ignored: Bool = false
 
     /// Identity for recency tracking.
-    var displayTitle: String { alias ?? title }
+    var displayName: String { alias ?? appLocalName }
 
     var key: String { windowId != 0 ? "w\(windowId)" : "p\(pid):\(title)" }
 }
