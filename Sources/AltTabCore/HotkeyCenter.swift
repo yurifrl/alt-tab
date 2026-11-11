@@ -14,8 +14,36 @@ import CoreGraphics
 /// flagsChanged keycodes (left/right Command/Option/Control/Shift + Fn) —
 /// CGEventFlags cannot distinguish sides; keycodes 54/55/58/61/59/62/56/60/63 can.
 
+/// Private CoreGraphics API: toggles the system's own symbolic hotkeys
+/// (1 = Cmd+Tab, 2 = Cmd+Shift+Tab). The Dock handles these before our
+/// session tap can consume them, so they must be disabled for Cmd+Tab to work.
+@_silgen_name("CGSSetSymbolicHotKeyEnabled")
+@discardableResult
+private func CGSSetSymbolicHotKeyEnabled(_ hotKey: Int32, _ enabled: Bool) -> Int32
+
 final class HotkeyCenter {
     static let shared = HotkeyCenter()
+
+    private var systemCmdTabDisabled = false
+
+    /// Disable/restore the native Cmd+Tab switcher so our binding takes precedence.
+    private func setNativeCmdTab(disabled: Bool) {
+        guard disabled != systemCmdTabDisabled else { return }
+        systemCmdTabDisabled = disabled
+        CGSSetSymbolicHotKeyEnabled(1, !disabled)
+        CGSSetSymbolicHotKeyEnabled(2, !disabled)
+        if disabled && !terminationHooked {
+            terminationHooked = true
+            NotificationCenter.default.addObserver(
+                forName: NSApplication.willTerminateNotification, object: nil, queue: nil
+            ) { _ in HotkeyCenter.shared.restoreNativeCmdTab() }
+            atexit { HotkeyCenter.shared.restoreNativeCmdTab() }
+        }
+    }
+    private var terminationHooked = false
+
+    /// Re-enable the system Cmd+Tab (call on quit).
+    func restoreNativeCmdTab() { setNativeCmdTab(disabled: false) }
 
     struct Binding {
         let id: String
@@ -138,6 +166,10 @@ final class HotkeyCenter {
         guard !newBindings.isEmpty else { return false }
         unregister()
         bindings = newBindings
+        let wantsCmdTab = newBindings.contains {
+            $0.keyCode == UInt32(kVK_Tab) && $0.mods.contains(.maskCommand)
+        }
+        setNativeCmdTab(disabled: wantsCmdTab)
 
         guard let newTap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
