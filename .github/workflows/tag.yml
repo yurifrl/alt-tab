@@ -1,0 +1,38 @@
+name: Tag
+
+# Changing the VERSION file on main creates the tag vX.Y.Z and kicks off the
+# Release workflow for it. (Tags pushed with GITHUB_TOKEN do not trigger other
+# workflows, so the release is dispatched explicitly.)
+on:
+  push:
+    branches: [main]
+    paths: [VERSION]
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create tag from VERSION
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] \
+            || { echo "VERSION '$VERSION' is not semver" >&2; exit 1; }
+          TAG="v$VERSION"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            echo "Tag $TAG already exists; nothing to do."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "AltTab $VERSION"
+          git push origin "$TAG"
+          gh workflow run release.yml --ref "$TAG" -f tag="$TAG"
