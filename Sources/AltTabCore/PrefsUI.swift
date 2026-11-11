@@ -50,7 +50,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
     // Rules pane
     private let appsOfPopup = NSPopUpButton(frame: .zero)
     private let orderPopup = NSPopUpButton(frame: .zero)
-    private let showIgnoredCheck = NSButton(checkboxWithTitle: "Show ignored windows at the bottom (skipped by Tab, never reorder). Hold I on a row to ignore it.", target: nil, action: nil)
+    private let showIgnoredCheck = NSButton(checkboxWithTitle: "Show ignored windows in an \"Ignored\" section (skipped by Tab, never reorder). In the panel: hold I to ignore a row, hold H to show/hide this section for the session.", target: nil, action: nil)
     private let spacePopup = NSPopUpButton(frame: .zero)
     private let bySpaceRadio = NSButton(radioButtonWithTitle: "By Space", target: nil, action: nil)
     private let oneGroupRadio = NSButton(radioButtonWithTitle: "In One Group", target: nil, action: nil)
@@ -424,6 +424,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
 
     @objc private func showIgnoredToggled(_ sender: NSButton) {
         PrefsStore.showIgnored = sender.state == .on
+        PrefsStore.sessionShowIgnored = nil
         WindowTracker.shared.refresh(reason: "prefs:showIgnored")
     }
     @objc private func orderChanged(_ sender: NSPopUpButton) { PrefsStore.orderByRecency = sender.indexOfSelectedItem == 0 }

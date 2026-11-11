@@ -221,7 +221,7 @@ final class WindowTracker {
             // Rules excludes: one matcher, owned by the store (bundle rules +
             // per-app title patterns), applied to the whole model.
             // With "Show ignored windows" they stay, flagged, and sink in the panel.
-            let showIgnored = PrefsStore.showIgnored
+            let showIgnored = PrefsStore.showIgnoredNow
             if showIgnored {
                 for i in rows.indices {
                     rows[i].ignored = PrefsStore.isExcluded(

@@ -615,6 +615,9 @@ final class SwitcherSession {
     /// Hold-i ignores (or un-ignores) the selected window; a tap types "i".
     private var iHold: DispatchWorkItem?
     private var iHoldFired = false
+    /// Hold-h shows/hides ignored windows for this session.
+    private var hHold: DispatchWorkItem?
+    private var hHoldFired = false
     /// Last committed window — the quick double-press re-targets it.
     private var lastCommittedModel: WindowModel?
     /// Verification surface for per-display panel placement (Phase 4).
@@ -855,7 +858,12 @@ final class SwitcherSession {
             return false
         }
         isOpen = true
-        panel.show(rows, query: searchQuery, headers: sectionHeaders(rowCount: rows.count))
+        var headers = sectionHeaders(rowCount: rows.count)
+        // "Ignored" section: below the rotation, after the last normal row.
+        if let firstIgnored = rows.firstIndex(where: \.ignored), headers[firstIgnored] == nil {
+            headers[firstIgnored] = "Ignored"
+        }
+        panel.show(rows, query: searchQuery, headers: headers)
         if selectFirst { panel.setSelection(0) }
         return true
     }
@@ -924,6 +932,9 @@ final class SwitcherSession {
         iHold?.cancel()
         iHold = nil
         iHoldFired = false
+        hHold?.cancel()
+        hHold = nil
+        hHoldFired = false
         let target = panel.selectedModel
         isOpen = false
         panel.hide()
@@ -955,6 +966,8 @@ final class SwitcherSession {
         if qHold != nil { flushPendingQ() }
         if kc == UInt32(kVK_ANSI_I), iHold != nil || iHoldFired { return true }
         if iHold != nil { flushPendingI() }
+        if kc == UInt32(kVK_ANSI_H), hHold != nil || hHoldFired { return true }
+        if hHold != nil { flushPendingH() }
         // In-panel action keys: modifier+letter acts on the selected row — only
         // before a query starts, so typing words never hides/quits an app.
         if searchQuery.isEmpty, let acted = Self.actionKey(of: event, mods: PrefsStore.actionQuitMods, letter: "q") {
@@ -1021,6 +1034,20 @@ final class SwitcherSession {
                 // Digit N selects row N (the "Numbers 1–9" gutter).
                 guard idx < panel.rows.count else { return true }
                 panel.setSelection(idx)
+            } else if kc == UInt32(kVK_ANSI_H), searchQuery.isEmpty,
+                      PrefsStore.typingStartsFastSearch,
+                      Self.searchEligibleFlags(event.flags) {
+                let work = DispatchWorkItem { [weak self] in
+                    guard let self, self.isOpen, self.hHold != nil else { return }
+                    self.hHold = nil
+                    self.hHoldFired = true
+                    PrefsStore.sessionShowIgnored = !PrefsStore.showIgnoredNow
+                    print("panel: show ignored (session) = \(PrefsStore.showIgnoredNow)")
+                    WindowTracker.shared.refresh(reason: "session-show-ignored")
+                }
+                hHold = work
+                hHoldFired = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.qHoldDelay, execute: work)
             } else if kc == UInt32(kVK_ANSI_I), searchQuery.isEmpty,
                       PrefsStore.typingStartsFastSearch,
                       Self.searchEligibleFlags(event.flags) {
@@ -1064,6 +1091,11 @@ final class SwitcherSession {
     /// fired, swallow the release.
     private func routeKeyUp(_ event: CGEvent) -> Bool {
         let kc = UInt32(clamping: event.getIntegerValueField(.keyboardEventKeycode))
+        if kc == UInt32(kVK_ANSI_H) {
+            if hHold != nil { flushPendingH(); return true }
+            if hHoldFired { hHoldFired = false; return true }
+            return false
+        }
         if kc == UInt32(kVK_ANSI_I) {
             if iHold != nil { flushPendingI(); return true }
             if iHoldFired { iHoldFired = false; return true }
@@ -1079,6 +1111,14 @@ final class SwitcherSession {
             return true
         }
         return false
+    }
+
+    private func flushPendingH() {
+        hHold?.cancel()
+        hHold = nil
+        guard isOpen else { return }
+        searchQuery.append("h")
+        applyQuery()
     }
 
     private func flushPendingI() {

@@ -217,6 +217,11 @@ enum PrefsStore {
         set { d.set(newValue, forKey: Key.showIgnored) }
     }
 
+    /// Hold-h in the panel: flips visibility of ignored windows until the app
+    /// quits, without touching the saved preference.
+    static var sessionShowIgnored: Bool?
+    static var showIgnoredNow: Bool { sessionShowIgnored ?? showIgnored }
+
     /// Hold-i: ignore the window by exact title under its app (toggles off if
     /// that exact rule already exists). Returns true when the rule set changed.
     @discardableResult
