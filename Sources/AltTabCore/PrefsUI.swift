@@ -36,6 +36,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
     private let displayPopup = NSPopUpButton(frame: .zero)
     private let delayCheck = NSButton(checkboxWithTitle: "Show Panel after a slight delay (tap and release quickly to switch to the last window)", target: nil, action: nil)
     private let hoverCheck = NSButton(checkboxWithTitle: "Hovering a row selects it", target: nil, action: nil)
+    private let ignoreMouseCheck = NSButton(checkboxWithTitle: "Ignore the mouse (no hover, click or scroll in the panel)", target: nil, action: nil)
     private let scrollCheck = NSButton(checkboxWithTitle: "Scroll wheel moves the selection", target: nil, action: nil)
     private let indicatorPopup = NSPopUpButton(frame: .zero)
     private let minimizedPopup = NSPopUpButton(frame: .zero)
@@ -182,6 +183,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
         displayPopup.target = self; displayPopup.action = #selector(displayChanged(_:))
         hoverCheck.target = self; hoverCheck.action = #selector(hoverToggled(_:))
         scrollCheck.target = self; scrollCheck.action = #selector(scrollToggled(_:))
+        ignoreMouseCheck.target = self; ignoreMouseCheck.action = #selector(ignoreMouseToggled(_:))
         indicatorPopup.addItems(withTitles: ["Search hints", "Numbers 1–9", "Neither"])
         for p in [minimizedPopup, hiddenPopup, windowlessPopup] {
             p.addItems(withTitles: ["Show", "Show at bottom", "Do not show"])
@@ -197,6 +199,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
             [label("Hidden apps:"), hiddenPopup],
             [NSGridCell.emptyContentView, hoverCheck],
             [NSGridCell.emptyContentView, scrollCheck],
+            [NSGridCell.emptyContentView, ignoreMouseCheck],
         ])
 
         // Rules pane -----------------------------------------------------------
@@ -313,6 +316,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
         displayPopup.selectItem(at: PrefsStore.PanelDisplay.allCases.firstIndex(of: PrefsStore.panelDisplay) ?? 0)
         hoverCheck.state = PrefsStore.hoverSelects ? .on : .off
         scrollCheck.state = PrefsStore.scrollSelects ? .on : .off
+        ignoreMouseCheck.state = PrefsStore.ignoreMouse ? .on : .off
         indicatorPopup.selectItem(at: PrefsStore.RowIndicator.allCases.firstIndex(of: PrefsStore.rowIndicator) ?? 0)
         minimizedPopup.selectItem(at: PrefsStore.WindowPolicy.allCases.firstIndex(of: PrefsStore.minimizedPolicy) ?? 0)
         hiddenPopup.selectItem(at: PrefsStore.WindowPolicy.allCases.firstIndex(of: PrefsStore.hiddenPolicy) ?? 0)
@@ -398,6 +402,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
 
     @objc private func hoverToggled(_ sender: NSButton) { PrefsStore.hoverSelects = sender.state == .on }
     @objc private func scrollToggled(_ sender: NSButton) { PrefsStore.scrollSelects = sender.state == .on }
+    @objc private func ignoreMouseToggled(_ sender: NSButton) { PrefsStore.ignoreMouse = sender.state == .on }
     @objc private func indicatorChanged(_ sender: NSPopUpButton) {
         PrefsStore.rowIndicator = PrefsStore.RowIndicator.allCases[sender.indexOfSelectedItem]
         SwitcherSession.shared.applyThemeLive()

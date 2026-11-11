@@ -39,6 +39,7 @@ enum PrefsStore {
         static let panelDelay = "at.panel.showAfterDelay"
         static let hoverSelects = "at.panel.hoverSelects"
         static let scrollSelects = "at.panel.scrollSelects"
+        static let ignoreMouse = "at.panel.ignoreMouse"
         static let spaceScope = "at.panel.spaceScope"
         static let minimizedPolicy = "at.panel.minimizedPolicy"
         static let orderByRecency = "at.panel.orderByRecency"
@@ -94,6 +95,12 @@ enum PrefsStore {
     static var scrollSelects: Bool {
         get { d.bool(forKey: Key.scrollSelects) }
         set { d.set(newValue, forKey: Key.scrollSelects) }
+    }
+
+    /// Master switch: the panel ignores hover, click and scroll entirely.
+    static var ignoreMouse: Bool {
+        get { d.bool(forKey: Key.ignoreMouse) }
+        set { d.set(newValue, forKey: Key.ignoreMouse) }
     }
 
     static var rowIndicator: RowIndicator {

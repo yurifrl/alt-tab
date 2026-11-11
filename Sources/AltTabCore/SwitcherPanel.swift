@@ -142,17 +142,17 @@ final class PanelRowView: NSView {
     }
 
     override func mouseEntered(with event: NSEvent) {
-        guard PrefsStore.hoverSelects, globalIndex >= 0 else { return }
+        guard !PrefsStore.ignoreMouse, PrefsStore.hoverSelects, globalIndex >= 0 else { return }
         onHover?(globalIndex)
     }
 
     override func mouseDown(with event: NSEvent) {
-        guard globalIndex >= 0 else { return }
+        guard !PrefsStore.ignoreMouse, globalIndex >= 0 else { return }
         onClick?(globalIndex)
     }
 
     override func scrollWheel(with event: NSEvent) {
-        guard PrefsStore.scrollSelects, abs(event.deltaY) > 0.4 else { return }
+        guard !PrefsStore.ignoreMouse, PrefsStore.scrollSelects, abs(event.deltaY) > 0.4 else { return }
         onScroll?(event.deltaY < 0 ? -1 : 1)
     }
 
