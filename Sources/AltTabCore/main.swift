@@ -615,6 +615,11 @@ func runAgent() {
     app.setActivationPolicy(.accessory)   // status-bar agent, no dock icon
 
     let actions = AgentActions()
+    // Launching the app again (Spotlight/Raycast/command palette) makes
+    // LaunchServices send a "reopen" event to the running agent → open prefs.
+    let reopenDelegate = ReopenDelegate()
+    app.delegate = reopenDelegate
+    objc_setAssociatedObject(app, "reopenDelegate", reopenDelegate, .OBJC_ASSOCIATION_RETAIN)
     let menu = NSMenu()
     let title = NSMenuItem(title: "alt-tab — running", action: nil, keyEquivalent: "")
     title.isEnabled = false
@@ -663,6 +668,13 @@ func runAgent() {
     installWhenReady()
 
     app.run()   // never returns
+}
+
+final class ReopenDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        PrefsWindowController.shared.showWindow(nil)
+        return false
+    }
 }
 
 @objc final class AgentActions: NSObject {

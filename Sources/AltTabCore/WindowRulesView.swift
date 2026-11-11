@@ -94,7 +94,10 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         build()
         observer = NotificationCenter.default.addObserver(
             forName: PrefsStore.windowRulesChanged, object: nil, queue: .main) { [weak self] _ in
-            self?.reload()
+            // Our own writes already match `rules`: reloading would reset
+            // transient form state (e.g. "Title matches" with an empty pattern).
+            guard let self, PrefsStore.windowRules != self.rules else { return }
+            self.reload()
         }
     }
     required init?(coder: NSCoder) { fatalError("unsupported") }
