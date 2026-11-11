@@ -163,7 +163,7 @@ final class PanelRowView: NSView {
         appNameText = wm.appLocalName
         iconView.image = NSRunningApplication(processIdentifier: wm.pid)?.icon
         appName.stringValue = wm.appLocalName
-        var text = wm.title
+        var text = wm.displayTitle
         if wm.minimized { text += "  (minimized)" }
         if wm.ignored { text += "  (ignored)" }
         titleText = text
@@ -828,7 +828,7 @@ final class SwitcherSession {
         // Search ranks, never filters (Contexts): best match first, stable.
         let q = searchQuery
         var ranked = rows.enumerated().map { (i: $0.offset, wm: $0.element,
-            sc: SearchText.score(app: $0.element.appLocalName, title: $0.element.title, query: q)) }
+            sc: SearchText.score(app: $0.element.appLocalName, title: $0.element.displayTitle, query: q)) }
         ranked.sort { $0.sc != $1.sc ? $0.sc > $1.sc : $0.i < $1.i }
         rows = ranked.map(\.wm)
         // "Last Selected for 'q…'": the window committed last time for this query.

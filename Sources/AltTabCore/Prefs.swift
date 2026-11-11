@@ -33,6 +33,7 @@ enum PrefsStore {
         static let searchMismatch = "at.search.allowMismatch"
         static let workspaceExcludes = "at.workspaces.appExcludes"   // [String] bundle ids
         static let workspaceTitleExcludes = "at.workspaces.titleExcludes" // [String] "bundle|pattern"
+        static let windowRules = "at.rules.windowRules"   // [[String: Any]] bundleId/pattern/hide/alias
         static let showWindowlessApps = "at.rules.showWindowlessApps"    // Bool
         static let panelDisplay = "at.panel.showOn"
         static let panelWidth = "at.panel.width"
@@ -229,15 +230,20 @@ enum PrefsStore {
     static var sessionShowIgnored: Bool?
     static var showIgnoredNow: Bool { sessionShowIgnored ?? showIgnored }
 
-    /// Hold-i: ignore the window by exact title under its app (toggles off if
-    /// that exact rule already exists). Returns true when the rule set changed.
+    /// Hold-i: hide the window by exact title under its app (toggles off if
+    /// that exact rule already hides it; a rule that also carries an alias is
+    /// kept, only its Hide flag flips). Returns true when the rule set changed.
     @discardableResult
     static func toggleIgnore(bundleId: String, title: String) -> Bool {
         guard !bundleId.isEmpty, !title.isEmpty else { return false }
-        let entry = "\(bundleId)|=\(title)"
-        var list = titleExcludes
-        if let i = list.firstIndex(of: entry) { list.remove(at: i) } else { list.append(entry) }
-        titleExcludes = list
+        let pattern = "=\(title)"
+        var list = windowRules
+        if let i = list.firstIndex(where: { $0.bundleId == bundleId && $0.pattern == pattern }) {
+            if list[i].hide && list[i].alias.isEmpty { list.remove(at: i) } else { list[i].hide.toggle() }
+        } else {
+            list.append(WindowRule(bundleId: bundleId, pattern: pattern, hide: true, alias: ""))
+        }
+        windowRules = list
         return true
     }
 
@@ -290,32 +296,71 @@ enum PrefsStore {
         set { d.set(newValue, forKey: Key.groupCount) }
     }
 
-    /// Apps never shown in the switcher.
-    static var workspaceExcludes: [String] {
-        get { d.stringArray(forKey: Key.workspaceExcludes) ?? [] }
-        set { d.set(newValue, forKey: Key.workspaceExcludes) }
+    /// One Rules-pane row: matches an app (bundle id) and optionally a window
+    /// title pattern (empty = every window of the app), then applies any of:
+    /// hide the window, show it under an alias.
+    struct WindowRule: Equatable {
+        var bundleId: String
+        var pattern: String
+        var hide: Bool
+        var alias: String
     }
 
-    /// Per-app title filters: entries are "bundleId|pattern" (pattern syntax:
-    /// "abc" contains, "=abc" exact, "^abc"/"abc$" anchors per Contexts docs).
-    static var titleExcludes: [String] {
-        get { d.stringArray(forKey: Key.workspaceTitleExcludes) ?? [] }
-        set { d.set(newValue, forKey: Key.workspaceTitleExcludes) }
+    /// Persisted rule list. First read migrates the legacy "apps to not show"
+    /// lists (bundle/name entries + "bundle|pattern" entries) into hide rules.
+    static var windowRules: [WindowRule] {
+        get {
+            if let raw = d.array(forKey: Key.windowRules) as? [[String: Any]] {
+                return raw.map {
+                    WindowRule(bundleId: $0["bundleId"] as? String ?? "",
+                               pattern: $0["pattern"] as? String ?? "",
+                               hide: $0["hide"] as? Bool ?? false,
+                               alias: $0["alias"] as? String ?? "")
+                }
+            }
+            var migrated: [WindowRule] = []
+            for e in d.stringArray(forKey: Key.workspaceExcludes) ?? [] where !e.isEmpty {
+                migrated.append(WindowRule(bundleId: e, pattern: "", hide: true, alias: ""))
+            }
+            for e in d.stringArray(forKey: Key.workspaceTitleExcludes) ?? [] {
+                guard let sep = e.firstIndex(of: "|") else { continue }
+                migrated.append(WindowRule(bundleId: String(e[..<sep]),
+                                           pattern: String(e[e.index(after: sep)...]),
+                                           hide: true, alias: ""))
+            }
+            d.set(migrated.map(dict), forKey: Key.windowRules)
+            return migrated
+        }
+        set { d.set(newValue.map(dict), forKey: Key.windowRules) }
     }
 
-    /// True when the window must not appear per the exclude rules.
-    /// Bundle-only rules: exact bundle id, or case-insensitive substring of the
-    /// app's local name (preserves the legacy loose app-name matching).
+    private static func dict(_ r: WindowRule) -> [String: Any] {
+        ["bundleId": r.bundleId, "pattern": r.pattern, "hide": r.hide, "alias": r.alias]
+    }
+
+    /// Rule match. Title patterns use the Contexts subset below. A pattern-less
+    /// rule whose app id is not a bundle id (no ".") keeps the legacy loose
+    /// matching on the app's local name.
+    private static func matches(_ r: WindowRule, bundleId: String, appLocalName: String, title: String) -> Bool {
+        let appMatches = r.bundleId == bundleId
+            || (r.pattern.isEmpty && !r.bundleId.contains(".") && !r.bundleId.isEmpty
+                && appLocalName.localizedCaseInsensitiveContains(r.bundleId))
+        guard appMatches else { return false }
+        return r.pattern.isEmpty || titleMatches(title, r.pattern)
+    }
+
+    /// True when the window must not appear per the Hide rules.
     static func isExcluded(bundleId: String, appLocalName: String, title: String) -> Bool {
-        for entry in workspaceExcludes {
-            if entry == bundleId { return true }
-            if appLocalName.localizedCaseInsensitiveContains(entry) { return true }
+        windowRules.contains {
+            $0.hide && matches($0, bundleId: bundleId, appLocalName: appLocalName, title: title)
         }
-        for entry in titleExcludes where entry.hasPrefix(bundleId + "|") {
-            let pattern = String(entry.dropFirst(bundleId.count + 1))
-            if titleMatches(title, pattern) { return true }
-        }
-        return false
+    }
+
+    /// Alias of the first matching rule that has one, else nil.
+    static func alias(bundleId: String, appLocalName: String, title: String) -> String? {
+        windowRules.first {
+            !$0.alias.isEmpty && matches($0, bundleId: bundleId, appLocalName: appLocalName, title: title)
+        }?.alias
     }
 
     /// Contexts pattern syntax subset: "abc" contains; "=abc" exact;
