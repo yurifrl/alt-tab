@@ -615,9 +615,9 @@ final class SwitcherSession {
     /// Hold-i ignores (or un-ignores) the selected window; a tap types "i".
     private var iHold: DispatchWorkItem?
     private var iHoldFired = false
-    /// Hold-h shows/hides ignored windows for this session.
-    private var hHold: DispatchWorkItem?
-    private var hHoldFired = false
+    /// Hold-v shows/hides ignored windows for this session.
+    private var vHold: DispatchWorkItem?
+    private var vHoldFired = false
     /// Last committed window — the quick double-press re-targets it.
     private var lastCommittedModel: WindowModel?
     /// Verification surface for per-display panel placement (Phase 4).
@@ -754,7 +754,7 @@ final class SwitcherSession {
             ?? PrefsStore.shortcuts.first(where: { $0.on })
         holdSideBits = HotkeyCenter.sideBits(fromCarbon: activeTrigger?.mods ?? 0)
         if isOpen {
-            panel.moveSelection(1, skipIgnored: true)
+            panel.moveSelection(1)
             return
         }
         if event.getIntegerValueField(.keyboardEventAutorepeat) != 0 {
@@ -932,9 +932,9 @@ final class SwitcherSession {
         iHold?.cancel()
         iHold = nil
         iHoldFired = false
-        hHold?.cancel()
-        hHold = nil
-        hHoldFired = false
+        vHold?.cancel()
+        vHold = nil
+        vHoldFired = false
         let target = panel.selectedModel
         isOpen = false
         panel.hide()
@@ -966,8 +966,8 @@ final class SwitcherSession {
         if qHold != nil { flushPendingQ() }
         if kc == UInt32(kVK_ANSI_I), iHold != nil || iHoldFired { return true }
         if iHold != nil { flushPendingI() }
-        if kc == UInt32(kVK_ANSI_H), hHold != nil || hHoldFired { return true }
-        if hHold != nil { flushPendingH() }
+        if kc == UInt32(kVK_ANSI_V), vHold != nil || vHoldFired { return true }
+        if vHold != nil { flushPendingV() }
         // In-panel action keys: modifier+letter acts on the selected row — only
         // before a query starts, so typing words never hides/quits an app.
         if searchQuery.isEmpty, let acted = Self.actionKey(of: event, mods: PrefsStore.actionQuitMods, letter: "q") {
@@ -1001,7 +1001,7 @@ final class SwitcherSession {
         let upCandidates = activeTrigger.map { [$0] } ?? PrefsStore.shortcuts.filter(\.on)
         for sc in upCandidates where sc.upMods != 0 {
             if kc == sc.upKey, eventMods & sc.upMods == sc.upMods {
-                panel.moveSelection(-1, skipIgnored: true)
+                panel.moveSelection(-1)
                 return true
             }
         }
@@ -1016,7 +1016,7 @@ final class SwitcherSession {
                 if carbon != 0 { holdSideBits = HotkeyCenter.sideBits(fromCarbon: carbon) }
             }
             let back = event.flags.intersection(HotkeyCenter.modifierBitsPublic).contains(.maskShift)
-            panel.moveSelection(back ? -1 : 1, skipIgnored: true)
+            panel.moveSelection(back ? -1 : 1)
         case UInt32(kVK_UpArrow):
             panel.moveSelection(-1)
         case UInt32(kVK_DownArrow):
@@ -1034,19 +1034,19 @@ final class SwitcherSession {
                 // Digit N selects row N (the "Numbers 1–9" gutter).
                 guard idx < panel.rows.count else { return true }
                 panel.setSelection(idx)
-            } else if kc == UInt32(kVK_ANSI_H), searchQuery.isEmpty,
+            } else if kc == UInt32(kVK_ANSI_V), searchQuery.isEmpty,
                       PrefsStore.typingStartsFastSearch,
                       Self.searchEligibleFlags(event.flags) {
                 let work = DispatchWorkItem { [weak self] in
-                    guard let self, self.isOpen, self.hHold != nil else { return }
-                    self.hHold = nil
-                    self.hHoldFired = true
+                    guard let self, self.isOpen, self.vHold != nil else { return }
+                    self.vHold = nil
+                    self.vHoldFired = true
                     PrefsStore.sessionShowIgnored = !PrefsStore.showIgnoredNow
                     print("panel: show ignored (session) = \(PrefsStore.showIgnoredNow)")
                     WindowTracker.shared.refresh(reason: "session-show-ignored")
                 }
-                hHold = work
-                hHoldFired = false
+                vHold = work
+                vHoldFired = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + Self.qHoldDelay, execute: work)
             } else if kc == UInt32(kVK_ANSI_I), searchQuery.isEmpty,
                       PrefsStore.typingStartsFastSearch,
@@ -1091,9 +1091,9 @@ final class SwitcherSession {
     /// fired, swallow the release.
     private func routeKeyUp(_ event: CGEvent) -> Bool {
         let kc = UInt32(clamping: event.getIntegerValueField(.keyboardEventKeycode))
-        if kc == UInt32(kVK_ANSI_H) {
-            if hHold != nil { flushPendingH(); return true }
-            if hHoldFired { hHoldFired = false; return true }
+        if kc == UInt32(kVK_ANSI_V) {
+            if vHold != nil { flushPendingV(); return true }
+            if vHoldFired { vHoldFired = false; return true }
             return false
         }
         if kc == UInt32(kVK_ANSI_I) {
@@ -1113,11 +1113,11 @@ final class SwitcherSession {
         return false
     }
 
-    private func flushPendingH() {
-        hHold?.cancel()
-        hHold = nil
+    private func flushPendingV() {
+        vHold?.cancel()
+        vHold = nil
         guard isOpen else { return }
-        searchQuery.append("h")
+        searchQuery.append("v")
         applyQuery()
     }
 

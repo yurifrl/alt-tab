@@ -51,7 +51,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
     // Rules pane
     private let appsOfPopup = NSPopUpButton(frame: .zero)
     private let orderPopup = NSPopUpButton(frame: .zero)
-    private let showIgnoredCheck = NSButton(checkboxWithTitle: "Show ignored windows in an \"Ignored\" section (skipped by Tab, never reorder). In the panel: hold I to ignore a row, hold H to show/hide this section for the session.", target: nil, action: nil)
+    private let showIgnoredCheck = NSButton(checkboxWithTitle: "Show ignored windows in a separate \"Ignored\" section", target: nil, action: nil)
     private let spacePopup = NSPopUpButton(frame: .zero)
     private let bySpaceRadio = NSButton(radioButtonWithTitle: "By Space", target: nil, action: nil)
     private let oneGroupRadio = NSButton(radioButtonWithTitle: "In One Group", target: nil, action: nil)
@@ -61,6 +61,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
     private let groupHelp = NSTextField(wrappingLabelWithString: "This applies to Sidebar and Gesture Switcher. Command-Tab has its own separate options. When set to Manually, new apps & windows are distributed across groups; but you can re-order them or move them between groups by drag & drop and reserve spots for apps from the right-click menu.")
     private let countHelp = NSTextField(wrappingLabelWithString: "With \"In One Group\" or \"Manually\" there's an option to show the Numbers Badge. When \"Manually\" is selected groups can also be renamed.")
     private let windowlessHelp = NSTextField(wrappingLabelWithString: "Shows apps for which there are no AX windows, e.g. apps with hidden or background-only windows.")
+    private let ignoredHelp = NSTextField(wrappingLabelWithString: "Tab reaches the section after the active windows, and focusing an ignored window never changes the order. In the panel, hold I to ignore (or un-ignore) the selected window, and hold V to show or hide the section for this session.")
     private let patternHelp = NSTextField(wrappingLabelWithString: "Window Title Patterns can be used to hide specific windows of an app. Use plain text for contains-matching, \"=\" for exact matches and \"^\"/\"$\" to anchor to the start/end of the title.")
     private let excludeTable = NSTableView()
     private let excludeScroll = NSScrollView()
@@ -246,7 +247,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
         // NSInternalInconsistencyException, which AppKit's menu dispatch
         // swallows, silently abandoning the rest of buildIfNeeded.
         for c in tickLabels.arrangedSubviews { (c as? NSTextField)?.alignment = .center }
-        for h in [groupHelp, countHelp, windowlessHelp, patternHelp] {
+        for h in [groupHelp, countHelp, windowlessHelp, patternHelp, ignoredHelp] {
             h.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
             h.textColor = .secondaryLabelColor
         }
@@ -265,6 +266,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
             [label("Show windows from:"), spacePopup],
             [label("Order windows by:"), orderPopup],
             [NSGridCell.emptyContentView, showIgnoredCheck],
+            [NSGridCell.emptyContentView, ignoredHelp],
         ])
 
         for grid in [cmdTabGrid, panelGrid, rulesGrid] {
