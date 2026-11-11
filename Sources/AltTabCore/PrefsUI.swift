@@ -40,10 +40,9 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
     private let indicatorPopup = NSPopUpButton(frame: .zero)
     private let minimizedPopup = NSPopUpButton(frame: .zero)
     private let hiddenPopup = NSPopUpButton(frame: .zero)
-    private let typingCheck = NSButton(checkboxWithTitle: "Typing starts Fast Search while the panel is open", target: nil, action: nil)
+    private let typingCheck = NSButton(checkboxWithTitle: "Typing searches while the panel is open", target: nil, action: nil)
 
     // Search pane
-    private let fastSearchPopup = NSPopUpButton(frame: .zero)
     private let shortcutsPopup = NSPopUpButton(frame: .zero)
     private let mismatchCheck = NSButton(checkboxWithTitle: "Allow mismatch (fuzzy subsequence matching)", target: nil, action: nil)
 
@@ -163,6 +162,9 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
         delayCheck.target = self; delayCheck.action = #selector(delayToggled(_:))
         typingCheck.target = self; typingCheck.action = #selector(typingToggled(_:))
         indicatorPopup.target = self; indicatorPopup.action = #selector(indicatorChanged(_:))
+        shortcutsPopup.addItems(withTitles: ["Off", "Remember last query", "Last 3 queries", "Last 5 queries"])
+        shortcutsPopup.target = self; shortcutsPopup.action = #selector(shortcutsChanged(_:))
+        mismatchCheck.target = self; mismatchCheck.action = #selector(mismatchToggled(_:))
 
         let cmdTabGrid = NSGridView(views: [
             [label("Switch windows:")],
@@ -170,6 +172,8 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
             [NSGridCell.emptyContentView, plusRow],
             [NSGridCell.emptyContentView, delayCheck],
             [NSGridCell.emptyContentView, typingCheck],
+            [label("Search Shortcuts:"), shortcutsPopup],
+            [NSGridCell.emptyContentView, mismatchCheck],
             [label("Show:"), indicatorPopup],
         ])
 
@@ -197,18 +201,6 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
             [label("Hidden apps:"), hiddenPopup],
             [NSGridCell.emptyContentView, hoverCheck],
             [NSGridCell.emptyContentView, scrollCheck],
-        ])
-
-        // Search pane --------------------------------------------------------
-        fastSearchPopup.addItems(withTitles: ["Off (no fast search)", "Hold ⌘ + type", "Hold ⌃ + type", "Hold ⌥ + type"])
-        fastSearchPopup.target = self; fastSearchPopup.action = #selector(fastSearchChanged(_:))
-        shortcutsPopup.addItems(withTitles: ["Off", "Remember last query", "Last 3 queries", "Last 5 queries"])
-        shortcutsPopup.target = self; shortcutsPopup.action = #selector(shortcutsChanged(_:))
-        mismatchCheck.target = self; mismatchCheck.action = #selector(mismatchToggled(_:))
-        let searchGrid = NSGridView(views: [
-            [label("Fast Search:"), fastSearchPopup],
-            [label("Search Shortcuts:"), shortcutsPopup],
-            [NSGridCell.emptyContentView, mismatchCheck],
         ])
 
         // Number pane ----------------------------------------------------------
@@ -283,7 +275,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
             [label("Show windows from:"), spacePopup],
         ])
 
-        for grid in [cmdTabGrid, panelGrid, searchGrid, numberGrid, rulesGrid] {
+        for grid in [cmdTabGrid, panelGrid, numberGrid, rulesGrid] {
             grid.rowSpacing = 10
             grid.columnSpacing = 12
             grid.column(at: 0).xPlacement = .trailing
@@ -292,7 +284,6 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
         let tabs = NSTabView(frame: NSRect(x: 0, y: 0, width: 540, height: 360))
         tabs.addTabViewItem(tab("Command-Tab", cmdTabGrid))
         tabs.addTabViewItem(tab("Panel", panelGrid))
-        tabs.addTabViewItem(tab("Search", searchGrid))
         tabs.addTabViewItem(tab("Number Switcher", numberGrid))
         tabs.addTabViewItem(tab("Rules", rulesGrid, height: 575))
         tabs.translatesAutoresizingMaskIntoConstraints = false
@@ -342,7 +333,6 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
 
         mismatchCheck.state = PrefsStore.searchAllowMismatch ? .on : .off
         shortcutsPopup.selectItem(at: [0, 1, 3, 5].firstIndex(of: PrefsStore.searchShortcutsDepth) ?? 0)
-        fastSearchPopup.selectItem(at: Self.fastSearchIndex(for: PrefsStore.fastSearchMods))
 
         digitsCheck.state = PrefsStore.numberInstantActivate ? .on : .off
         let sides = PrefsStore.numberSideMask
@@ -361,25 +351,6 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
         windowlessPopup.selectItem(at: PrefsStore.WindowPolicy.allCases.firstIndex(of: PrefsStore.windowlessPolicy) ?? 0)
 
         refreshShortcutTable()
-    }
-
-    private static func fastSearchIndex(for mods: UInt32) -> Int {
-        switch mods {
-        case 0: return 0
-        case UInt32(cmdKey): return 1
-        case UInt32(controlKey): return 2
-        case UInt32(optionKey): return 3
-        default: return 0
-        }
-    }
-
-    private static func fastSearchMods(for index: Int) -> UInt32 {
-        switch index {
-        case 1: return UInt32(cmdKey)
-        case 2: return UInt32(controlKey)
-        case 3: return UInt32(optionKey)
-        default: return 0
-        }
     }
 
     private func describeBinding(_ m: UInt32, _ key: UInt32) -> String {
@@ -466,9 +437,6 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
     @objc private func mismatchToggled(_ sender: NSButton) { PrefsStore.searchAllowMismatch = sender.state == .on }
     @objc private func shortcutsChanged(_ sender: NSPopUpButton) {
         PrefsStore.searchShortcutsDepth = [0, 1, 3, 5][sender.indexOfSelectedItem]
-    }
-    @objc private func fastSearchChanged(_ sender: NSPopUpButton) {
-        PrefsStore.fastSearchMods = Self.fastSearchMods(for: sender.indexOfSelectedItem)
     }
 
     @objc private func digitsToggled(_ sender: NSButton) { PrefsStore.numberInstantActivate = sender.state == .on }

@@ -155,17 +155,33 @@ final class WindowTracker {
             // Minimized windows: Do not show filters them; Show at bottom sinks
             // them below every visible row (Contexts "Minimized windows").
             if PrefsStore.minimizedPolicy == .doNotShow { rows.removeAll { $0.minimized } }
-            if PrefsStore.minimizedPolicy == .showAtBottom || PrefsStore.windowlessPolicy == .showAtBottom {
-                // One stable sink pass: minimized first, then windowless
-                // (windowless rows are never minimized, so the keys don't fight).
-                func sinkKey(_ w: WindowModel) -> (Int, Int) {
-                    (PrefsStore.minimizedPolicy == .showAtBottom && w.minimized ? 1 : 0,
-                     PrefsStore.windowlessPolicy == .showAtBottom && w.windowless ? 1 : 0)
+            // "Show at bottom" for minimized / hidden / windowless: one stable
+            // sink pass (Array.sort is not stable — sort on (sinkKey, index)).
+            let minBottom = PrefsStore.minimizedPolicy == .showAtBottom
+            let hidBottom = PrefsStore.hiddenPolicy == .showAtBottom
+            let wlBottom = PrefsStore.windowlessPolicy == .showAtBottom
+            if minBottom || hidBottom || wlBottom {
+                func sinkKey(_ w: WindowModel) -> (Int, Int, Int) {
+                    (hidBottom && w.appHidden ? 1 : 0,
+                     minBottom && w.minimized ? 1 : 0,
+                     wlBottom && w.windowless ? 1 : 0)
                 }
-                rows.sort { sinkKey($0) < sinkKey($1) }
+                rows = rows.enumerated()
+                    .sorted {
+                        let l = sinkKey($0.element), r = sinkKey($1.element)
+                        return (l.0, l.1, l.2, $0.offset) < (r.0, r.1, r.2, $1.offset)
+                    }
+                    .map(\.element)
             }
-            if PrefsStore.spaceScope != .allSpaces {
-                rows.removeAll { !$0.minimized && offscreenWindowKeys.contains(WindowKey(pid: $0.pid, title: $0.title, frame: $0.frame)) }
+            // Space scope: offscreen (other-Space) windows drop out; the
+            // "+ fullscreen" variant keeps native-fullscreen windows.
+            let scope = PrefsStore.spaceScope
+            if scope != .allSpaces {
+                rows.removeAll { w in
+                    guard !w.minimized, !w.appHidden else { return false }
+                    if scope == .visibleAndFullscreen, w.fullscreen { return false }
+                    return offscreenWindowKeys.contains(WindowKey(pid: w.pid, title: w.title, frame: w.frame))
+                }
             }
             // Rules excludes: one matcher, owned by the store (bundle rules +
             // per-app title patterns), applied to the whole model.

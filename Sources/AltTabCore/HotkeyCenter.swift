@@ -44,9 +44,13 @@ final class HotkeyCenter {
     var interceptor: ((CGEvent) -> Bool)?
 
     /// Second-pass consumer for tap-level features the panel does not own:
-    /// global number-switcher digits and fast-search start letters.
+    /// global number-switcher digits.
     /// Return true to consume.
     var rawKeyHandler: ((CGEvent, UInt32) -> Bool)?
+
+    /// keyUp consumer (hold-vs-tap keys, e.g. hold Q to close a window).
+    /// Return true to consume.
+    var keyUpHandler: ((CGEvent) -> Bool)?
 
     /// Idempotent enable; used after consuming events, since WindowServer may
     /// disable an active tap after matched/consumed deliveries.
@@ -145,6 +149,7 @@ final class HotkeyCenter {
             place: .headInsertEventTap,
             options: .defaultTap,
             eventsOfInterest: CGEventMask((1 << CGEventType.keyDown.rawValue)
+                                          | (1 << CGEventType.keyUp.rawValue)
                                           | (1 << CGEventType.flagsChanged.rawValue)),
             callback: { _, type, event, _ in
                 if TapLog.on {
@@ -155,6 +160,14 @@ final class HotkeyCenter {
                     if TapLog.on { TapLog.log("sides → 0x\(String(HotkeyCenter.shared.sideMask, radix: 16))") }
                     HotkeyCenter.shared.flagsChangedHandler?(HotkeyCenter.shared.sideMask)
                     HotkeyCenter.shared.rearm()
+                    return Unmanaged.passUnretained(event)
+                }
+                if type == .keyUp {
+                    // keyUps never reach bindings; only the hold-key consumer sees them.
+                    if !HotkeyCenter.shared.suspended, HotkeyCenter.shared.keyUpHandler?(event) == true {
+                        HotkeyCenter.shared.rearm()
+                        return nil
+                    }
                     return Unmanaged.passUnretained(event)
                 }
                 return HotkeyCenter.shared.dispatch(event)
@@ -206,7 +219,7 @@ final class HotkeyCenter {
             return nil // consume
         }
 
-        // Tap-level extras: number switcher digits / fast-search letters.
+        // Tap-level extras: number switcher digits.
         if rawKeyHandler?(event, sideMask) == true {
             if TapLog.on { TapLog.log("dispatch → rawKeyHandler consumed") }
             return nil

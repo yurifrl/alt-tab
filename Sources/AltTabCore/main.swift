@@ -16,6 +16,9 @@ struct WindowModel {
     var appHidden: Bool = false
     /// App has no windows of its own (Contexts "windowless apps" filter).
     var windowless: Bool = false
+    /// Window is in native fullscreen (its own Space) — kept by the
+    /// "Visible Spaces (+ fullscreen)" scope even when offscreen.
+    var fullscreen: Bool = false
 }
 
 private let axValueTypeId = AXValueGetTypeID()
@@ -140,7 +143,8 @@ func enumerateWindows() -> [WindowModel] {
                                    minimized: minimized,
                                    ax: w,
                                    appHidden: appHidden,
-                                   windowless: false))
+                                   windowless: false,
+                                   fullscreen: (axCopy(w, "AXFullScreen") as? Bool) ?? false))
             // Stash onscreen bit: encode via frame zero + onscreen check site later.
             if !onscreen { offscreenWindowKeys.insert(WindowKey(pid: app.processIdentifier, title: title, frame: frame)) }
             else { offscreenWindowKeys.remove(WindowKey(pid: app.processIdentifier, title: title, frame: frame)) }

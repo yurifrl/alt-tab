@@ -8,10 +8,20 @@ import Carbon.HIToolbox
 enum SearchText {
     /// UTF-16 positions of each query character in a fuzzy subsequence match
     /// over `text`, or nil when the query is not a subsequence of it.
-    static func positions(in text: String, query: String) -> [Range<Int>]? {
+    /// `fuzzy` = "Allow mismatch" search pref: off → only a contiguous
+    /// case-insensitive substring counts (one highlighted run).
+    static func positions(in text: String, query: String,
+                          fuzzy: Bool = PrefsStore.searchAllowMismatch) -> [Range<Int>]? {
         let t = Array(text.lowercased().utf16)
         let q = Array(query.lowercased().utf16)
         guard !q.isEmpty, !t.isEmpty else { return nil }
+        if !fuzzy {
+            guard q.count <= t.count else { return nil }
+            for start in 0...(t.count - q.count) where Array(t[start..<(start + q.count)]) == q {
+                return (start..<(start + q.count)).map { $0..<($0 + 1) }
+            }
+            return nil
+        }
         var out: [Range<Int>] = []
         var ti = 0
         // Partial greedy match: query chars not found are skipped, so rows
@@ -28,18 +38,16 @@ enum SearchText {
     /// substring (prefix of the app name best).
     static func score(app: String, title: String, query: String) -> Int {
         let q = query.lowercased()
+        let fuzzy = PrefsStore.searchAllowMismatch
         func one(_ text: String, prefixBonus: Int, subBonus: Int) -> Int {
             let t = text.lowercased()
-            var sc = (positions(in: text, query: query)?.count ?? 0) * 10
+            var sc = (positions(in: text, query: query, fuzzy: fuzzy)?.count ?? 0) * 10
             if t.hasPrefix(q) { sc += prefixBonus } else if t.contains(q) { sc += subBonus }
             return sc
         }
         return max(one(app, prefixBonus: 100, subBonus: 60), one(title, prefixBonus: 50, subBonus: 30))
     }
 
-    static func isMatch(_ text: String, query: String) -> Bool {
-        positions(in: text, query: query) != nil
-    }
 }
 
 /// One row, Contexts Command-Tab cell style: hint gutter | right-aligned app
@@ -62,13 +70,15 @@ final class PanelRowView: NSView {
     private(set) var globalIndex: Int = -1
     var onHover: ((Int) -> Void)?
     var onClick: ((Int) -> Void)?
+    /// Scroll-wheel step (+1 down / −1 up), relative to the current selection.
+    var onScroll: ((Int) -> Void)?
 
     init() {
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 6
         addTrackingArea(NSTrackingArea(
-            rect: .infinite, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            rect: .infinite, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
             owner: self, userInfo: nil))
         titleClip.wantsLayer = true
         titleClip.layer?.masksToBounds = true
@@ -143,7 +153,7 @@ final class PanelRowView: NSView {
 
     override func scrollWheel(with event: NSEvent) {
         guard PrefsStore.scrollSelects, abs(event.deltaY) > 0.4 else { return }
-        onHover?(globalIndex + (event.deltaY < 0 ? -1 : 1))
+        onScroll?(event.deltaY < 0 ? -1 : 1)
     }
 
     func configure(_ wm: WindowModel, globalIndex idx: Int = -1, query: String = "", hint: Character? = nil) {
@@ -289,6 +299,7 @@ final class SwitcherPanelController {
                               hint: off < hints.count ? hints[off] : nil)
                 row.onHover = { [weak self] idx in self?.hoverCallback?(idx) }
                 row.onClick = { [weak self] idx in self?.clickCallback?(idx) }
+                row.onScroll = { [weak self] step in self?.scrollCallback?(step) }
                 row.translatesAutoresizingMaskIntoConstraints = false
                 stack.addArrangedSubview(row)
                 NSLayoutConstraint.activate([
@@ -381,6 +392,7 @@ final class SwitcherPanelController {
 
         var hoverCallback: ((Int) -> Void)?
         var clickCallback: ((Int) -> Void)?
+        var scrollCallback: ((Int) -> Void)?
 
         func setHighlight(localIndex: Int?, globalForLog: Int) {
             for (i, row) in rowViews.enumerated() {
@@ -485,6 +497,7 @@ final class SwitcherPanelController {
         for (pi, sp) in screenPanels.enumerated() {
             sp.hoverCallback = { [weak self] idx in self?.hoverSelect(idx) }
             sp.clickCallback = { [weak self] idx in self?.clickCommit(idx) }
+            sp.scrollCallback = { [weak self] step in self?.moveSelection(step) }
             sp.rows = assigned[pi]
             sp.headers = headers
             let base = assigned.prefix(pi).reduce(0) { $0 + $1.count }
@@ -546,9 +559,6 @@ final class SwitcherSession {
     private let panel = SwitcherPanelController()
     private(set) var isOpen = false
     private var searchQuery = ""
-    /// Fast Search in progress: the side-mask that started it (non-nil while
-    /// the overlay-less query runs — letters append, Space commits, Esc exits).
-    private var pendingSearchMods: UInt32?
     /// Remembered queries (Search Shortcuts), newest first, capped by depth.
     private var searchMemory: [String] = []
     /// query → window last committed for it (pid + title).
@@ -578,6 +588,11 @@ final class SwitcherSession {
     private var activeTrigger: PrefsStore.TriggerShortcut?
     /// Pending delayed-open task ("show panel after a slight delay").
     private var openTask: DispatchWorkItem?
+    /// Hold-Q: pending timer while Q is down; fires closeWindow on the
+    /// selected row. `qHoldFired` swallows the rest of that press.
+    private var qHold: DispatchWorkItem?
+    private var qHoldFired = false
+    private static let qHoldDelay: TimeInterval = 0.4
     /// Last committed window — the quick double-press re-targets it.
     private var lastCommittedModel: WindowModel?
     /// Verification surface for per-display panel placement (Phase 4).
@@ -598,6 +613,10 @@ final class SwitcherSession {
         HotkeyCenter.shared.interceptor = { [weak self] event in
             guard let self, self.isOpen else { return false }
             return self.routeKey(event)
+        }
+        HotkeyCenter.shared.keyUpHandler = { [weak self] event in
+            guard let self else { return false }
+            return self.routeKeyUp(event)
         }
         HotkeyCenter.shared.flagsChangedHandler = { [weak self] sideMask in
             guard let self else { return }
@@ -777,7 +796,8 @@ final class SwitcherSession {
         ranked.sort { $0.sc != $1.sc ? $0.sc > $1.sc : $0.i < $1.i }
         rows = ranked.map(\.wm)
         // "Last Selected for 'q…'": the window committed last time for this query.
-        if let mem = lastSelected[q],
+        if PrefsStore.searchShortcutsDepth > 0, searchMemory.contains(q),
+           let mem = lastSelected[q],
            let idx = rows.firstIndex(where: { $0.pid == mem.pid && $0.title == mem.title }) {
             rows.insert(rows.remove(at: idx), at: 0)
             topIsRemembered = true
@@ -843,20 +863,6 @@ final class SwitcherSession {
         }
     }
 
-    /// Substring or fuzzy subsequence (case-insensitive) over title and app
-    /// name, gated by the "allow mismatch" search pref. Shared with the row
-    /// renderer so highlight positions come from the identical scan.
-    private func searchMatches(_ wm: WindowModel) -> Bool {
-        let targets = [wm.title, wm.appLocalName]
-        if PrefsStore.searchAllowMismatch {
-            // Fuzzy: every query char appears in order (subsequence match).
-            return targets.contains { SearchText.isMatch($0, query: searchQuery) }
-        }
-        return targets.contains {
-            $0.localizedCaseInsensitiveContains(searchQuery)
-        }
-    }
-
     /// Tracker change while panel is open: rebuild rows, keep selection pinned
     /// to the same pid+title when that window still exists.
     private func refreshRowsIfOpen() {
@@ -874,6 +880,8 @@ final class SwitcherSession {
         if TapLog.on { TapLog.log("close(commit=\(commit)) isOpen=\(isOpen) selection=\(panel.selection)") }
         openTask?.cancel()
         openTask = nil
+        qHold?.cancel()
+        qHold = nil
         let target = panel.selectedModel
         isOpen = false
         panel.hide()
@@ -884,7 +892,8 @@ final class SwitcherSession {
             while searchMemory.count > PrefsStore.searchShortcutsDepth { searchMemory.removeLast() }
         }
         if commit, !searchQuery.isEmpty, let t = target { lastSelected[searchQuery] = (t.pid, t.title) }
-        pendingSearchMods = nil
+        // Forget picks for queries that fell out of the remembered set.
+        lastSelected = lastSelected.filter { searchMemory.contains($0.key) }
         holdSideBits = nil
         activeTrigger = nil
         searchQuery = ""
@@ -896,20 +905,12 @@ final class SwitcherSession {
 
     private func routeKey(_ event: CGEvent) -> Bool {
         let kc = UInt32(clamping: event.getIntegerValueField(.keyboardEventKeycode))
-        // Fast Search (Panel pane): letters keep filtering, Space commits,
-        // Esc exits the overlay-less mode.
-        if let mods = pendingSearchMods {
-            if event.flags.intersection(HotkeyCenter.modifierBitsPublic).isEmpty {
-                switch Self.character(of: event)?.lowercased() {
-                case " ":  close(commit: true); return true
-                case "\u{1b}":  pendingSearchMods = nil; searchQuery = ""; print("fast-search: exited"); return true
-                case .some(let ch) where ch.count == 1 && ch.first!.isLetter:
-                    searchQuery.append(ch); applyQuery(); return true
-                default: return false
-                }
-            }
-            pendingSearchMods = mods   // keep-alive while modifiers held
+        // Hold-Q: swallow Q's autorepeat; any other key while Q is still
+        // pending means it was a fast tap (rollover) → type the "q" first.
+        if kc == UInt32(kVK_ANSI_Q), qHold != nil || qHoldFired {
+            return true
         }
+        if qHold != nil { flushPendingQ() }
         // In-panel action keys: modifier+letter acts on the selected row — only
         // before a query starts, so typing words never hides/quits an app.
         if searchQuery.isEmpty, let acted = Self.actionKey(of: event, mods: PrefsStore.actionQuitMods, letter: "q") {
@@ -937,7 +938,11 @@ final class SwitcherSession {
         // hold-to-switch advancing is untouched.
         // Consumed here so it can never reach its own trigger binding.
         let eventMods = HotkeyCenter.carbonFlags(fromCG: event.flags.intersection(HotkeyCenter.modifierBitsPublic))
-        for sc in PrefsStore.shortcuts where sc.on && sc.upMods != 0 {
+        // Only the opening trigger's own move-up pairs while it is held —
+        // otherwise a sibling's move-up equal to this trigger's activate combo
+        // (⌘` up = ⌘Tab) would make the forward key move back.
+        let upCandidates = activeTrigger.map { [$0] } ?? PrefsStore.shortcuts.filter(\.on)
+        for sc in upCandidates where sc.upMods != 0 {
             if kc == sc.upKey, eventMods & sc.upMods == sc.upMods {
                 panel.moveSelection(-1)
                 return true
@@ -972,15 +977,27 @@ final class SwitcherSession {
                 // Number switcher parity: flagless digit commits instantly; a
                 // digit pressed with any configured Number-switch modifier
                 // side also commits (Contexts "switch numbers with").
-                let sides = HotkeyCenter.shared.sideMask
-                if (event.flags.isEmpty || (sides != 0 && sides & PrefsStore.numberSideMask != 0))
-                    && PrefsStore.numberInstantActivate {
-                    panel.setSelection(idx)
-                    close(commit: true)
-                } else {
-                    panel.setSelection(idx)
+                // Digit N selects row N (the "Numbers 1–9" gutter); "instantly
+                // activates" also commits, whatever modifiers the hold keeps down.
+                guard idx < panel.rows.count else { return true }
+                panel.setSelection(idx)
+                if PrefsStore.numberInstantActivate { close(commit: true) }
+            } else if kc == UInt32(kVK_ANSI_Q), searchQuery.isEmpty,
+                      PrefsStore.typingStartsFastSearch,
+                      Self.searchEligibleFlags(event.flags) {
+                // Hold Q closes the selected window; a tap still types "q"
+                // (on keyUp, or when the next key arrives).
+                let work = DispatchWorkItem { [weak self] in
+                    guard let self, self.isOpen, self.qHold != nil else { return }
+                    self.qHold = nil
+                    self.qHoldFired = true
+                    self.actOnSelected(.closeWindow)
                 }
+                qHold = work
+                qHoldFired = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.qHoldDelay, execute: work)
             } else if let ch = Self.letterKeycodes[kc].map({ String($0) }) ?? (kc == 49 && !searchQuery.isEmpty ? " " : nil),
+                      PrefsStore.typingStartsFastSearch,
                       Self.searchEligibleFlags(event.flags) {
                 // Every letter types into the search; commit is Enter / release.
                 searchQuery.append(ch)
@@ -990,6 +1007,31 @@ final class SwitcherSession {
             }
         }
         return true
+    }
+
+    /// Q released: before the hold delay it was a tap → type "q"; after it
+    /// fired, swallow the release.
+    private func routeKeyUp(_ event: CGEvent) -> Bool {
+        let kc = UInt32(clamping: event.getIntegerValueField(.keyboardEventKeycode))
+        guard kc == UInt32(kVK_ANSI_Q) else { return false }
+        if qHold != nil {
+            flushPendingQ()
+            return true
+        }
+        if qHoldFired {
+            qHoldFired = false
+            return true
+        }
+        return false
+    }
+
+    /// Resolve a pending Q press as a tap: cancel the hold timer, type "q".
+    private func flushPendingQ() {
+        qHold?.cancel()
+        qHold = nil
+        guard isOpen else { return }
+        searchQuery.append("q")
+        applyQuery()
     }
 
     /// Matches one in-panel action: modifiers exactly equal the configured
@@ -1036,16 +1078,18 @@ final class SwitcherSession {
     }
 
     /// Global (panel-closed) route: number switcher digits under a held
-    /// side-mask, and Fast Search start letters under the configured mods.
+    /// side-mask.
     private func routeGlobalKey(_ event: CGEvent, sideMask: UInt32) -> Bool {
         let kc = UInt32(clamping: event.getIntegerValueField(.keyboardEventKeycode))
         // Number switcher: held modifiers match the configured side-mask and
         // the key is a digit row key.
         let numberMask = PrefsStore.numberModifierMask
-        if numberMask != 0, sideMask & numberMask == numberMask,
+        // Any checked side counts ("Switch numbers with: Left ⌘ / Right ⌘ …").
+        if numberMask != 0, sideMask & numberMask != 0, !isOpen,
            let idx = Self.digitKeycodes[kc] {
-            WindowTracker.shared.refresh(reason: "number")
-            let rows = WindowTracker.shared.windows.filter { !$0.title.isEmpty }
+            // Same rows/order the panel numbers (apps scope, focused app first).
+            searchQuery = ""
+            let rows = trackerRows()
             guard rows.indices.contains(idx) else { return false }
             if PrefsStore.numberInstantActivate {
                 panel.onCommit?(rows[idx])
@@ -1054,23 +1098,6 @@ final class SwitcherSession {
                 panel.setSelection(idx)
             }
             print("number: digit \(idx + 1) → [\(rows[idx].appLocalName)]")
-            return true
-        }
-        // Fast Search start: the configured side-mask + a letter opens the
-        // overlay-less query without showing the panel.
-        let fsMods = PrefsStore.fastSearchMods
-        if fsMods != 0, sideMask & fsMods == fsMods,
-           let ch = Self.character(of: event)?.lowercased(),
-           ch.count == 1, ch.first!.isLetter, !isOpen {
-            WindowTracker.shared.refresh(reason: "fast-search")
-            searchQuery = ch
-            pendingSearchMods = sideMask
-            if PrefsStore.searchShortcutsDepth > 0, let remembered = searchMemory.first {
-                // Prefill remembered query with the typed char as prefix hint.
-                _ = remembered
-            }
-            renderFromTracker(selectFirst: true)
-            print("fast-search: started \"\(searchQuery)\"")
             return true
         }
         return false

@@ -2,7 +2,7 @@ import AppKit
 import Carbon.HIToolbox
 
 /// Preferences, namespaced `at.*`. Mirrors the Contexts option surface
-/// (Command-Tab, Panel, Search, Number Switcher, Rules panes).
+/// (Command-Tab, Panel, Number Switcher, Rules panes).
 /// Everything persisted; consumers read live on each use.
 enum PrefsStore {
     enum Theme: String, CaseIterable { case auto, vibrantLight, vibrantDark }
@@ -29,7 +29,6 @@ enum PrefsStore {
         static let moveUpKey = "at.hotkey.moveUpKey"
         static let searchMods = "at.hotkey.searchFlags"
         static let shortcuts = "at.shortcuts.list"
-        static let fastSearchMods = "at.fastsearch.flags"      // bitmask of held modifiers
         static let searchShortcuts = "at.search.shortcutsDepth" // 0=off,1,3,5
         static let searchMismatch = "at.search.allowMismatch"
         static let numberInstantActivate = "at.number.instantActivate"
@@ -203,7 +202,7 @@ enum PrefsStore {
         set { d.set(newValue, forKey: Key.numberInstantActivate) }
     }
 
-    /// Side-mask bits (shared scheme with fastSearchMods): leftCmd=1, rightCmd=2,
+    /// Side-mask bits (per-side scheme): leftCmd=1, rightCmd=2,
     /// leftOpt=4, rightOpt=8 — sides are tracked from keycodes, not flags.
     static var numberSideMask: UInt32 {
         get { UInt32(d.integer(forKey: "at.number.modifierMask")) }
@@ -228,13 +227,6 @@ enum PrefsStore {
     }
     /// Side-mask currently held (HotkeyCenter keeps it fresh from keycodes).
     static var numberModifierMask: UInt32 { numberSideMask }
-
-    /// Side-mask scheme shared with number switching (leftCmd=1, rightCmd=2,
-    /// leftOpt=4, rightOpt=8, fn=16).
-    static var fastSearchMods: UInt32 {
-        get { UInt32(d.integer(forKey: Key.fastSearchMods)) }
-        set { d.set(Int(newValue), forKey: Key.fastSearchMods) }
-    }
 
     /// Per-side toggle used by the Number Switcher prefs pane.
     static func toggledSide(_ mask: UInt32, _ bit: UInt32, _ on: Bool) -> UInt32 {
@@ -284,7 +276,7 @@ enum PrefsStore {
         set { d.set(newValue.rawValue, forKey: Key.windowlessPolicy) }
     }
 
-    /// Panel-only: letters start Fast Search while the panel is visible.
+    /// Panel-only: letters type into the search while the panel is visible.
     static var typingStartsFastSearch: Bool {
         get { d.object(forKey: Key.typingStartsFastSearch) as? Bool ?? true }
         set { d.set(newValue, forKey: Key.typingStartsFastSearch) }
