@@ -68,6 +68,8 @@ final class PanelRowView: NSView {
     private var appNameText = ""
     /// Hold-R rename in progress: app label shows the draft with a caret.
     private var editing = false
+    /// Draft fully selected (just entered edit mode): next key replaces it.
+    private var editAllSelected = false
     private var isSelected = false
     /// Click target ownership: session checks `isHoverSelectable` on hit-test.
     private(set) var globalIndex: Int = -1
@@ -180,9 +182,10 @@ final class PanelRowView: NSView {
 
     /// Hold-R editor: the app label becomes `draft` + caret (underlined) and the
     /// gutter letter previews the quick-go key the draft would give.
-    func beginEdit(_ draft: String) {
+    func beginEdit(_ draft: String, allSelected: Bool = false) {
         editing = true
-        appNameText = draft + "\u{258F}"
+        editAllSelected = allSelected
+        appNameText = allSelected ? draft : draft + "\u{258F}"
         hintLetter = draft.lowercased().first { $0.isLetter }.map { String($0) } ?? baseHintLetter
         applyIndicator()
         setHighlighted(isSelected)
@@ -229,8 +232,11 @@ final class PanelRowView: NSView {
         para.lineBreakMode = .byTruncatingTail
         styledName.addAttribute(.paragraphStyle, value: para, range: NSRange(location: 0, length: styledName.length))
         if editing {
-            styledName.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue,
-                                    range: NSRange(location: 0, length: styledName.length))
+            let all = NSRange(location: 0, length: styledName.length)
+            styledName.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: all)
+            if editAllSelected {
+                styledName.addAttribute(.backgroundColor, value: NSColor.white.withAlphaComponent(0.35), range: all)
+            }
         }
         appName.attributedStringValue = styledName
     }
@@ -585,7 +591,9 @@ final class SwitcherPanelController {
         let views = screenPanels[i.panel].rowViews
         return views.indices.contains(i.row) ? views[i.row] : nil
     }
-    func beginRename(_ draft: String) { selectedRowView()?.beginEdit(draft) }
+    func beginRename(_ draft: String, allSelected: Bool = false) {
+        selectedRowView()?.beginEdit(draft, allSelected: allSelected)
+    }
     func endRename(showing name: String?) { selectedRowView()?.endEdit(showing: name) }
 
     func model(at globalIdx: Int) -> WindowModel? {
@@ -666,6 +674,8 @@ final class SwitcherSession {
     private var rHold: DispatchWorkItem?
     private var rHoldFired = false
     private var renameDraft: String?
+    /// Entered edit mode with the whole draft selected; first edit replaces it.
+    private var renameAllSelected = false
     private static let maxAliasLength = 24
 
     /// Last committed window — the quick double-press re-targets it.
@@ -918,7 +928,7 @@ final class SwitcherSession {
         }
         panel.show(rows, query: searchQuery, headers: headers)
         if selectFirst { panel.setSelection(0) }
-        if let draft = renameDraft { panel.beginRename(draft) }
+        if let draft = renameDraft { panel.beginRename(draft, allSelected: renameAllSelected) }
         return true
     }
 
@@ -1206,7 +1216,8 @@ final class SwitcherSession {
         guard let target = panel.selectedModel, !target.bundleId.isEmpty else { return }
         let draft = target.alias ?? target.appLocalName
         renameDraft = draft
-        panel.beginRename(draft)
+        renameAllSelected = true
+        panel.beginRename(draft, allSelected: true)
         print("panel: rename begin [\(target.appLocalName)] \"\(target.title)\"")
     }
 
@@ -1214,6 +1225,9 @@ final class SwitcherSession {
     /// characters append. Everything else is swallowed (panel stays put).
     private func routeRenameKey(_ event: CGEvent, kc: UInt32) -> Bool {
         guard var draft = renameDraft else { return false }
+        // R is still physically down from the hold: swallow its autorepeat.
+        // Input starts once R is released (routeKeyUp clears rHoldFired).
+        if kc == UInt32(kVK_ANSI_R), rHoldFired { return true }
         switch kc {
         case UInt32(kVK_Return), UInt32(kVK_ANSI_KeypadEnter):
             finishRename(save: true)
@@ -1222,7 +1236,7 @@ final class SwitcherSession {
             finishRename(save: false)
             return true
         case UInt32(kVK_Delete):
-            if !draft.isEmpty { draft.removeLast() }
+            if renameAllSelected { draft = "" } else if !draft.isEmpty { draft.removeLast() }
         default:
             let mods = event.flags.intersection(HotkeyCenter.modifierBitsPublic)
             let plain = mods.subtracting(.maskShift).isEmpty
@@ -1232,9 +1246,10 @@ final class SwitcherSession {
             else if kc == 49 { ch = " " }
             guard let c = ch, let u = c.unicodeScalars.first, u.value >= 32, u.value != 127,
                   !(0xF700...0xF8FF).contains(u.value),            // arrows/function keys
-                  draft.count < Self.maxAliasLength else { return true }
-            draft += c
+                  renameAllSelected || draft.count < Self.maxAliasLength else { return true }
+            draft = renameAllSelected ? c : draft + c
         }
+        renameAllSelected = false
         renameDraft = draft
         panel.beginRename(draft)
         return true
