@@ -356,11 +356,28 @@ enum PrefsStore {
         }
     }
 
-    /// Alias of the first matching rule that has one, else nil.
+    /// Alias of the best matching rule that has one (a title-specific rule
+    /// beats an app-wide one), else nil.
     static func alias(bundleId: String, appLocalName: String, title: String) -> String? {
-        windowRules.first {
+        let hits = windowRules.filter {
             !$0.alias.isEmpty && matches($0, bundleId: bundleId, appLocalName: appLocalName, title: title)
-        }?.alias
+        }
+        return (hits.first { !$0.pattern.isEmpty } ?? hits.first)?.alias
+    }
+
+    /// Hold-R: set (or clear, with "") the alias of the exact-title rule under
+    /// the app. A rule left with no alias and no hide is dropped.
+    static func setAlias(bundleId: String, title: String, alias: String) {
+        guard !bundleId.isEmpty, !title.isEmpty else { return }
+        let pattern = "=\(title)"
+        var list = windowRules
+        if let i = list.firstIndex(where: { $0.bundleId == bundleId && $0.pattern == pattern }) {
+            list[i].alias = alias
+            if alias.isEmpty && !list[i].hide { list.remove(at: i) }
+        } else if !alias.isEmpty {
+            list.append(WindowRule(bundleId: bundleId, pattern: pattern, hide: false, alias: alias))
+        }
+        windowRules = list
     }
 
     /// Contexts pattern syntax subset: "abc" contains; "=abc" exact;

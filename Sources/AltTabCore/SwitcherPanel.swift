@@ -64,7 +64,10 @@ final class PanelRowView: NSView {
     private var titleMatches: [Range<Int>]?
     private var appMatches: [Range<Int>]?
     private var hintLetter = ""
+    private var baseHintLetter = ""
     private var appNameText = ""
+    /// Hold-R rename in progress: app label shows the draft with a caret.
+    private var editing = false
     private var isSelected = false
     /// Click target ownership: session checks `isHoverSelectable` on hit-test.
     private(set) var globalIndex: Int = -1
@@ -159,6 +162,8 @@ final class PanelRowView: NSView {
     func configure(_ wm: WindowModel, globalIndex idx: Int = -1, query: String = "", hint: Character? = nil) {
         globalIndex = idx
         hintLetter = hint.map { String($0) } ?? ""
+        baseHintLetter = hintLetter
+        editing = false
         appMatches = query.isEmpty ? nil : SearchText.positions(in: wm.displayName, query: query)
         appNameText = wm.displayName
         iconView.image = NSRunningApplication(processIdentifier: wm.pid)?.icon
@@ -171,6 +176,31 @@ final class PanelRowView: NSView {
         alphaValue = wm.ignored ? 0.45 : (wm.minimized ? 0.55 : 1.0)
         applyIndicator()
         setHighlighted(false)
+    }
+
+    /// Hold-R editor: the app label becomes `draft` + caret (underlined) and the
+    /// gutter letter previews the quick-go key the draft would give.
+    func beginEdit(_ draft: String) {
+        editing = true
+        appNameText = draft + "\u{258F}"
+        hintLetter = draft.lowercased().first { $0.isLetter }.map { String($0) } ?? baseHintLetter
+        applyIndicator()
+        setHighlighted(isSelected)
+    }
+
+    /// Leaves the editor, showing `name` (saved result) or the pre-edit label.
+    func endEdit(showing name: String?) {
+        editing = false
+        if let name {
+            appNameText = name
+            hintLetter = name.lowercased().first { $0.isLetter }.map { String($0) } ?? baseHintLetter
+            baseHintLetter = hintLetter
+        } else {
+            hintLetter = baseHintLetter
+            appNameText = appName.stringValue
+        }
+        applyIndicator()
+        setHighlighted(isSelected)
     }
 
     /// Row indicator per pref: number gutter, search-hint gutter, or neither.
@@ -198,6 +228,10 @@ final class PanelRowView: NSView {
         para.alignment = .right
         para.lineBreakMode = .byTruncatingTail
         styledName.addAttribute(.paragraphStyle, value: para, range: NSRange(location: 0, length: styledName.length))
+        if editing {
+            styledName.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue,
+                                    range: NSRange(location: 0, length: styledName.length))
+        }
         appName.attributedStringValue = styledName
     }
 
@@ -545,6 +579,15 @@ final class SwitcherPanelController {
         setSelection(next)
     }
 
+    private func selectedRowView() -> PanelRowView? {
+        guard index.indices.contains(selection) else { return nil }
+        let i = index[selection]
+        let views = screenPanels[i.panel].rowViews
+        return views.indices.contains(i.row) ? views[i.row] : nil
+    }
+    func beginRename(_ draft: String) { selectedRowView()?.beginEdit(draft) }
+    func endRename(showing name: String?) { selectedRowView()?.endEdit(showing: name) }
+
     func model(at globalIdx: Int) -> WindowModel? {
         guard index.indices.contains(globalIdx) else { return nil }
         return screenPanels[index[globalIdx].panel].rows[index[globalIdx].row]
@@ -616,6 +659,13 @@ final class SwitcherSession {
     private var iHold: DispatchWorkItem?
     private var iHoldFired = false
     /// Hold-h shows/hides ignored windows for this session.
+    /// Hold-R: rename the selected row's app label (alias). `renameDraft` is
+    /// non-nil while editing; every key is routed to it until Return/Esc.
+    private var rHold: DispatchWorkItem?
+    private var rHoldFired = false
+    private var renameDraft: String?
+    private static let maxAliasLength = 24
+
     private var hHold: DispatchWorkItem?
     private var hHoldFired = false
     /// Last committed window — the quick double-press re-targets it.
@@ -780,6 +830,8 @@ final class SwitcherSession {
         }
         guard let bits = holdSideBits, sideMask & bits == 0 else { return }
         holdSideBits = nil
+        // Mid-rename: letting go of the trigger keys must not commit/close.
+        if renameDraft != nil { return }
         if isOpen {
             print("panel: released trigger — committing selection")
             close(commit: true)
@@ -866,6 +918,7 @@ final class SwitcherSession {
         }
         panel.show(rows, query: searchQuery, headers: headers)
         if selectFirst { panel.setSelection(0) }
+        if let draft = renameDraft { panel.beginRename(draft) }
         return true
     }
 
@@ -936,6 +989,10 @@ final class SwitcherSession {
         hHold?.cancel()
         hHold = nil
         hHoldFired = false
+        rHold?.cancel()
+        rHold = nil
+        rHoldFired = false
+        renameDraft = nil
         let target = panel.selectedModel
         isOpen = false
         panel.hide()
@@ -959,6 +1016,10 @@ final class SwitcherSession {
 
     private func routeKey(_ event: CGEvent) -> Bool {
         let kc = UInt32(clamping: event.getIntegerValueField(.keyboardEventKeycode))
+        if renameDraft != nil { return routeRenameKey(event, kc: kc) }
+        // Hold-R: swallow R's autorepeat; another key first means a tap.
+        if kc == UInt32(kVK_ANSI_R), rHold != nil || rHoldFired { return true }
+        if rHold != nil { flushPendingR() }
         // Hold-Q: swallow Q's autorepeat; any other key while Q is still
         // pending means it was a fast tap (rollover) → type the "q" first.
         if kc == UInt32(kVK_ANSI_Q), qHold != nil || qHoldFired {
@@ -1049,6 +1110,18 @@ final class SwitcherSession {
                 hHold = work
                 hHoldFired = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + Self.qHoldDelay, execute: work)
+            } else if kc == UInt32(kVK_ANSI_R), searchQuery.isEmpty,
+                      PrefsStore.typingStartsFastSearch,
+                      Self.searchEligibleFlags(event.flags) {
+                let work = DispatchWorkItem { [weak self] in
+                    guard let self, self.isOpen, self.rHold != nil else { return }
+                    self.rHold = nil
+                    self.rHoldFired = true
+                    self.beginRenameSelected()
+                }
+                rHold = work
+                rHoldFired = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.qHoldDelay, execute: work)
             } else if kc == UInt32(kVK_ANSI_I), searchQuery.isEmpty,
                       PrefsStore.typingStartsFastSearch,
                       Self.searchEligibleFlags(event.flags) {
@@ -1092,6 +1165,11 @@ final class SwitcherSession {
     /// fired, swallow the release.
     private func routeKeyUp(_ event: CGEvent) -> Bool {
         let kc = UInt32(clamping: event.getIntegerValueField(.keyboardEventKeycode))
+        if kc == UInt32(kVK_ANSI_R) {
+            if rHold != nil { flushPendingR(); return true }
+            if rHoldFired { rHoldFired = false; return true }
+            return false
+        }
         if kc == UInt32(kVK_ANSI_H) {
             if hHold != nil { flushPendingH(); return true }
             if hHoldFired { hHoldFired = false; return true }
@@ -1112,6 +1190,69 @@ final class SwitcherSession {
             return true
         }
         return false
+    }
+
+    private func flushPendingR() {
+        rHold?.cancel()
+        rHold = nil
+        guard isOpen else { return }
+        searchQuery.append("r")
+        applyQuery()
+    }
+
+    // MARK: Hold-R rename (alias for the app-name column)
+
+    private func beginRenameSelected() {
+        guard let target = panel.selectedModel, !target.bundleId.isEmpty else { return }
+        let draft = target.alias ?? target.appLocalName
+        renameDraft = draft
+        panel.beginRename(draft)
+        print("panel: rename begin [\(target.appLocalName)] \"\(target.title)\"")
+    }
+
+    /// Keys while editing: Return saves, Esc cancels, ⌫ deletes, printable
+    /// characters append. Everything else is swallowed (panel stays put).
+    private func routeRenameKey(_ event: CGEvent, kc: UInt32) -> Bool {
+        guard var draft = renameDraft else { return false }
+        switch kc {
+        case UInt32(kVK_Return), UInt32(kVK_ANSI_KeypadEnter):
+            finishRename(save: true)
+            return true
+        case UInt32(kVK_Escape):
+            finishRename(save: false)
+            return true
+        case UInt32(kVK_Delete):
+            if !draft.isEmpty { draft.removeLast() }
+        default:
+            let mods = event.flags.intersection(HotkeyCenter.modifierBitsPublic)
+            let plain = mods.subtracting(.maskShift).isEmpty
+            var ch: String?
+            if plain { ch = Self.character(of: event) }
+            else if let l = Self.letterKeycodes[kc] { ch = String(l) }   // ⌥ would type "å"
+            else if kc == 49 { ch = " " }
+            guard let c = ch, let u = c.unicodeScalars.first, u.value >= 32, u.value != 127,
+                  !(0xF700...0xF8FF).contains(u.value),            // arrows/function keys
+                  draft.count < Self.maxAliasLength else { return true }
+            draft += c
+        }
+        renameDraft = draft
+        panel.beginRename(draft)
+        return true
+    }
+
+    private func finishRename(save: Bool) {
+        guard let draft = renameDraft else { return }
+        renameDraft = nil
+        guard save, let target = panel.selectedModel else {
+            panel.endRename(showing: nil)
+            return
+        }
+        let alias = draft.trimmingCharacters(in: .whitespaces)
+        let effective = alias == target.appLocalName ? "" : alias
+        PrefsStore.setAlias(bundleId: target.bundleId, title: target.title, alias: effective)
+        panel.endRename(showing: effective.isEmpty ? target.appLocalName : effective)
+        print("panel: rename → [\(target.appLocalName)] \"\(target.title)\" alias=\"\(effective)\"")
+        WindowTracker.shared.refresh(reason: "alias")
     }
 
     private func flushPendingH() {
