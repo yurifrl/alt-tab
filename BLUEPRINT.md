@@ -1,11 +1,8 @@
-# alt-tab — Reimplementation Blueprint
+# alt-tab — Blueprint
 
-Reference: Contexts 3.9.0 (license held by Yuri — legitimate behavioral reference).
-Clean-room: architecture/techniques/behavior reused; **no** Contexts code, assets, or binary formats copied.
+## Feature model
 
-## Feature model (extracted via RE)
-
-| Subsystem | Contexts behavior | Priority |
+| Subsystem | Behavior | Priority |
 |---|---|---|
 | Command Tab switcher | Overlay panel per display; app+window list; key-driven cycling; activation on release | P0 |
 | Window model | Live app/window inventory via Accessibility; geometry + titles + minimized state | P0 |
@@ -16,7 +13,7 @@ Clean-room: architecture/techniques/behavior reused; **no** Contexts code, asset
 | Prefs | `CTPreference*`-style UserDefaults keys; per-pane UI | P2 |
 | Appearance | Vibrant Dark/Light themes | P2 |
 
-Explicitly **dropped**: Realm persistence (overkill — SQLite/SwiftData/files suffice; Contexts only stored `CLIShortcut` rows), AppCenter telemetry (never ship), Sparkle (reuse directly — open source), RSA license scheme (not applicable).
+Explicitly **dropped**: Realm persistence (overkill — SQLite/SwiftData/files suffice), AppCenter telemetry (never ship), Sparkle (reuse directly — open source), RSA license scheme (not applicable).
 
 ## Architecture
 
@@ -38,14 +35,14 @@ Sources/AltTab/
 
 Communication flows down only (Core ← UI ← Control); model pushes updates via NotificationCenter.
 
-## Techniques validated against the reference binary
+## Techniques
 
-1. **AX enumeration**: `AXUIElementCreateApplication(pid)` → `kAXWindowsAttribute`; per-window `kAXTitle/Position/Size` (AXValue unwrap). Contexts binds `AXObserverCreate/AddNotification` for live updates — do the same after slice 2; polling is slice-1 fallback.
+1. **AX enumeration**: `AXUIElementCreateApplication(pid)` → `kAXWindowsAttribute`; per-window `kAXTitle/Position/Size` (AXValue unwrap). Bind `AXObserverCreate/AddNotification` for live updates after slice 2; polling is slice-1 fallback.
 2. **Geometry fallback**: `CGWindowListCopyWindowInfo` for frames of AX-uncooperative apps (Electron etc.).
-3. **Per-display panels**: borderless `NSPanel`, `level = .statusBar + 1`, `collectionBehavior: [.canJoinAllSpaces, .fullScreenAuxiliary]`, one per `NSScreen`. Vibrant material matches reference's VibrantDark/Light.
-4. **Hotkeys**: Contexts wraps MASShortcut (Carbon `RegisterEventHotKey`). Reimplement thin wrapper — ~100 LOC, no pod needed.
-5. **Spaces awareness** (P3): NSWorkspace `activeSpaceDidChangeNotification` + CGWindow on-screen ordering. Contexts additionally reads private Spaces prefs — copy that behavior only if needed, flag as review-risk.
-6. **MultitouchSupport** (P3): private framework, matches Contexts' exact import set (`MTDeviceCreateList`, callbacks). App-Store-disqualifying; fine for personal builds.
+3. **Per-display panels**: borderless `NSPanel`, `level = .statusBar + 1`, `collectionBehavior: [.canJoinAllSpaces, .fullScreenAuxiliary]`, one per `NSScreen`. Vibrant material gives the vibrant dark/light look.
+4. **Hotkeys**: Thin wrapper over Carbon `RegisterEventHotKey` — ~100 LOC, no pod needed.
+5. **Spaces awareness** (P3): NSWorkspace `activeSpaceDidChangeNotification` + CGWindow on-screen ordering. Reading private Spaces prefs is an option — only if needed, flag as review-risk.
+6. **MultitouchSupport** (P3): private framework, uses `MTDeviceCreateList` and callbacks. App-Store-disqualifying; fine for personal builds.
 
 ## Phase plan
 
@@ -56,12 +53,12 @@ Communication flows down only (Core ← UI ← Control); model pushes updates vi
 | 3 | Live tracking | AXObserver wired; panel stays correct across focus/space changes |
 | 4 | Per-display + fullscreen panels | Panels on every screen incl. fullscreen spaces |
 | 5 | Prefs + themes | UserDefaults schema, vibrant light/dark |
-| 6 | Contexts-parity extras | Number switcher, workspaces, gestures (in order) |
+| 6 | Extras | Number switcher, workspaces, gestures (in order) |
 
 ## Risks
 
 - **TCC Accessibility**: build must be granted Accessibility (Terminal/IDE or signed app). Slice 1 proves this immediately; untrusted → system prompt.
-- **Secure input / password fields**: Contexts shows SecureInputWarning; replicate eventually.
+- **Secure input / password fields**: show a secure-input warning eventually.
 - **Hardened runtime needed** before distributing (notarization) — irrelevant until Phase 6.
 
 ## Build status (all phases verified live, 2026-10-30)
@@ -71,7 +68,7 @@ Communication flows down only (Core ← UI ← Control); model pushes updates vi
 | AX enumeration | `main.swift` | `enum` — live windows with frames/titles |
 | Window activation | `main.swift` `activate()` | `activate` — frontmost + focused-title assertions, Chrome-profile disambiguation |
 | Global hotkey | `HotkeyCenter.swift` | `hotkey` — 2/2 synthetic fires; active session CGEventTap (Carbon ignores synthetic keys); tap auto-disable → `rearm()` |
-| Hold-to-switch trigger | `HotkeyCenter.swift` + `SwitcherPanel.swift` | synthetic + real-key (`holdKeys`) against live agent: hold opens panel (preselects previous window), Tab/Shift+Tab cycle while held, release commits (AX-confirmed activation); quick double-tap instant-commits without panel; Esc cancels and post-close release never commits. Hold arms from the trigger keyDown itself (binding match proves the mods are down — immune to ⌥-down/Tab-down report order); `flagsChangedHandler` + event-flag-authoritative `sideMask` detects release. **Contexts must be quit: it hooks ⌥Tab too and reacts to every ⌥ flap** |
+| Hold-to-switch trigger | `HotkeyCenter.swift` + `SwitcherPanel.swift` | synthetic + real-key (`holdKeys`) against live agent: hold opens panel (preselects previous window), Tab/Shift+Tab cycle while held, release commits (AX-confirmed activation); quick double-tap instant-commits without panel; Esc cancels and post-close release never commits. Hold arms from the trigger keyDown itself (binding match proves the mods are down — immune to ⌥-down/Tab-down report order); `flagsChangedHandler` + event-flag-authoritative `sideMask` detects release. |
 | Switcher panel | `SwitcherPanel.swift` | `panel` — open/cycle/commit/cancel sequence assertions |
 | Live tracking | `WindowTracker.swift` | `track` — NSWorkspace + AXObserver notifications rebuild model, selection pinned |
 | Per-display panels | `SwitcherPanel.swift` | `panel` — geometry: 2 screens → 2 panels, rows partitioned, centered in `visibleFrame` |

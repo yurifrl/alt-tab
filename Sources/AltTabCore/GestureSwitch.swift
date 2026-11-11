@@ -1,10 +1,10 @@
 import AppKit
 import CoreGraphics
 
-/// Contexts-parity gesture switch (Phase 6): a two-finger "double touch"
+/// Gesture switch (Phase 6): a two-finger "double touch"
 /// (second finger lands while one is already down, then both lift) cycles
 /// windows. Uses the private MultitouchSupport framework — the same private
-/// API surface Contexts links (`MTDeviceCreateList`, `MTRegisterContactFrameCallback`).
+/// API surface used (`MTDeviceCreateList`, `MTRegisterContactFrameCallback`).
 ///
 /// Contacts semantics: each MTTouch has `state` (touch-start bitmask) and
 /// `frame` (0-based contact ordinal in the current gesture frame).

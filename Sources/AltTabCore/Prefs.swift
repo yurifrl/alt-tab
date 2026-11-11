@@ -1,7 +1,7 @@
 import AppKit
 import Carbon.HIToolbox
 
-/// Preferences, namespaced `at.*`. Mirrors the Contexts option surface
+/// Preferences, namespaced `at.*`.
 /// (Command-Tab, Panel, Rules panes).
 /// Everything persisted; consumers read live on each use.
 enum PrefsStore {
@@ -9,13 +9,13 @@ enum PrefsStore {
 
     /// Where switcher panels appear.
     enum PanelDisplay: String, CaseIterable { case all, primary, active }
-    /// Window space filter (Contexts "Show windows from").
+    /// Window space filter ("Show windows from").
     enum SpaceScope: String, CaseIterable { case allSpaces, visibleAndFullscreen, visibleSpaces }
-    /// Per-class window visibility policy (Contexts: Show / Show at bottom / Do not show).
+    /// Per-class window visibility policy (Show / Show at bottom / Do not show).
     enum WindowPolicy: String, CaseIterable { case show, showAtBottom, doNotShow }
-    /// What the panel shows next to each row (Contexts "Show:").
+    /// What the panel shows next to each row ("Show:").
     enum RowIndicator: String, CaseIterable { case searchHints, numbers, neither }
-    /// Space grouping (Contexts "Group windows").
+    /// Space grouping ("Group windows").
     enum Grouping: String, CaseIterable { case bySpace, oneGroup, manually }
 
     private static let d = UserDefaults.standard
@@ -71,7 +71,7 @@ enum PrefsStore {
         set { d.set(newValue, forKey: Key.maxRows) }
     }
 
-    /// Panel width in points, Narrow→Wide slider (Contexts default ≈ 560).
+    /// Panel width in points, Narrow→Wide slider (default ≈ 560).
     static var panelWidth: Double {
         get { d.object(forKey: Key.panelWidth) as? Double ?? 920 }
         set { d.set(newValue, forKey: Key.panelWidth) }
@@ -82,7 +82,7 @@ enum PrefsStore {
         set { d.set(newValue.rawValue, forKey: Key.panelDisplay) }
     }
 
-    /// Contexts "Show Panel after a slight delay" (avoids flicker on quick
+    /// "Show Panel after a slight delay" (avoids flicker on quick
     /// switch to last window).
     static var panelShowDelay: Bool {
         get { d.object(forKey: Key.panelDelay) as? Bool ?? true }
@@ -128,7 +128,7 @@ enum PrefsStore {
         var upKey: UInt32
     }
 
-    /// Contexts' default set: ⌘Tab (move up ⌘`), ⌘` (move up ⌘Tab), ⌥Tab
+    /// Default set: ⌘Tab (move up ⌘`), ⌘` (move up ⌘Tab), ⌥Tab
     /// (move up ⌥`), ⌥` (move up ⌥Tab) — the Command pair enabled.
     static let defaultShortcuts: [TriggerShortcut] = [
         TriggerShortcut(on: true, mods: UInt32(cmdKey), key: UInt32(kVK_Tab),
@@ -141,7 +141,7 @@ enum PrefsStore {
                         upMods: UInt32(optionKey), upKey: UInt32(kVK_Tab)),
     ]
 
-    /// Persisted shortcut list (JSON). Absent → Contexts defaults.
+    /// Persisted shortcut list (JSON). Absent → defaults.
     static var shortcuts: [TriggerShortcut] {
         get {
             guard let raw = d.string(forKey: Key.shortcuts), let data = raw.data(using: .utf8),
@@ -362,7 +362,7 @@ enum PrefsStore {
         ["bundleId": r.bundleId, "pattern": r.pattern, "hide": r.hide, "alias": r.alias, "color": r.color]
     }
 
-    /// Rule match. Title patterns use the Contexts subset below. A pattern-less
+    /// Rule match. Title patterns use the subset below. A pattern-less
     /// rule whose app id is not a bundle id (no ".") keeps the legacy loose
     /// matching on the app's local name.
     private static func matches(_ r: WindowRule, bundleId: String, appLocalName: String, title: String) -> Bool {
@@ -413,7 +413,7 @@ enum PrefsStore {
         windowRules = list
     }
 
-    /// Contexts pattern syntax subset: "abc" contains; "=abc" exact;
+    /// Pattern syntax subset: "abc" contains; "=abc" exact;
     /// "^abc" prefix; "abc$" suffix.
     static func titleMatches(_ title: String, _ pattern: String) -> Bool {
         if pattern.hasPrefix("=") { return title == String(pattern.dropFirst()) }
@@ -423,7 +423,7 @@ enum PrefsStore {
     }
 
     // MARK: In-panel action keys (Panel pane: Close/Quit/Minimize/Hide rows)
-    // 0 means unset → Option (Contexts-style defaults).
+    // 0 means unset → Option (defaults).
 
     private static func actionMods(_ key: String) -> UInt32 {
         let v = UInt32(d.integer(forKey: key))

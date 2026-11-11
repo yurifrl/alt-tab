@@ -1,7 +1,7 @@
 import AppKit
 import ApplicationServices
 
-/// Keeps a fresh window model without blind re-enumeration (Contexts-style):
+/// Keeps a fresh window model without blind re-enumeration:
 /// NSWorkspace activation/termination notifications + per-app AXObservers for
 /// focused-window, title, and minimized changes. Any change rebuilds the model
 /// and notifies listeners.
@@ -181,14 +181,14 @@ final class WindowTracker {
                 let el = fw as! AXUIElement
                 focused = rows.first { $0.ax.map { CFEqual($0, el) } ?? false }?.key
             }
-            // Contexts filters, applied at model build time. Panel policies drive
+            // Filters applied at model build time. Panel policies drive
             // the shared model; the switcher/session slices further by scope.
             if PrefsStore.hiddenPolicy == .doNotShow { rows.removeAll { $0.appHidden } }
             // Windowless apps: Do not show filters them; Show at bottom sinks
-            // them below every windowed row (Contexts "Apps without windows").
+            // them below every windowed row ("Apps without windows").
             if PrefsStore.windowlessPolicy == .doNotShow { rows.removeAll { $0.windowless } }
             // Minimized windows: Do not show filters them; Show at bottom sinks
-            // them below every visible row (Contexts "Minimized windows").
+            // them below every visible row ("Minimized windows").
             if PrefsStore.minimizedPolicy == .doNotShow { rows.removeAll { $0.minimized } }
             // "Show at bottom" for minimized / hidden / windowless: one stable
             // sink pass (Array.sort is not stable — sort on (sinkKey, index)).

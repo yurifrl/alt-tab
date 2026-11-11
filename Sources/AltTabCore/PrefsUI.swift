@@ -1,13 +1,13 @@
 import AppKit
 import Carbon.HIToolbox
 
-/// Preferences window (Phase 5 + Contexts parity panes): one tab per Contexts
+/// Preferences window (Phase 5): one tab per
 /// settings pane. Every control writes PrefsStore directly and applies live —
 /// theme re-skins open surfaces, hotkeys rebind instantly.
 final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTableViewDelegate, NSTableViewDataSource, NSTextFieldDelegate {
     static let shared = PrefsWindowController()
 
-    // Command-Tab pane — Contexts-style shortcut list: an "Or"/"Shortcut"
+    // Command-Tab pane — shortcut list: an "Or"/"Shortcut"
     // table on the left, the selected row's activate/move-up chips to its
     // right, +/− for custom triggers below.
     private enum RecordingKind { case moveUp, trigger }
@@ -115,7 +115,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
         themePopup.addItems(withTitles: ["Auto", "Vibrant Light", "Vibrant Dark"])
         themePopup.target = self; themePopup.action = #selector(themeChanged(_:))
 
-        // Contexts' shortcut list: "Or" checkbox column + trigger name; the
+        // Shortcut list: "Or" checkbox column + trigger name; the
         // selected row's move-up recorder sits to its right.
         let orCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("or")); orCol.title = "Or"; orCol.width = 36
         let nameCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name")); nameCol.title = "Shortcut"; nameCol.width = 160

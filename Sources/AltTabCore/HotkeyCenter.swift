@@ -2,8 +2,7 @@ import AppKit
 import Carbon.HIToolbox
 import CoreGraphics
 
-/// Global-hotkey engine built on an active CGEventTap (Contexts-style:
-/// `CFMachPortCreateRunLoopSource` session tap). Matches keyDown events by
+/// Global-hotkey engine built on an active CGEventTap (`CFMachPortCreateRunLoopSource` session tap). Matches keyDown events by
 /// exact keycode + modifier-set intersection on the standard modifier bits.
 /// Carbon `RegisterEventHotKey` is NOT used: on this macOS it ignores
 /// synthetic key events, and an active tap both catches hardware and

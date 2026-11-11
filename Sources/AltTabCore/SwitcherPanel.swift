@@ -50,7 +50,7 @@ enum SearchText {
 
 }
 
-/// One row, Contexts Command-Tab cell style: hint gutter | right-aligned app
+/// One row, Command-Tab cell style: hint gutter | right-aligned app
 /// name | icon | window title. Matched query characters render in orange.
 final class PanelRowView: NSView {
     private let hint = NSTextField(labelWithString: "")
@@ -107,7 +107,7 @@ final class PanelRowView: NSView {
 
     required init?(coder: NSCoder) { fatalError("unsupported") }
 
-    /// Columns (Contexts Command-Tab): hint gutter 10–26, app name right edge
+    /// Columns (Command-Tab): hint gutter 10–26, app name right edge
     /// at 196, icon 204–224, title from 230 to the row's right edge − 8.
     override func layout() {
         super.layout()
@@ -273,7 +273,7 @@ final class PanelRowView: NSView {
 }
 
 /// Borderless, non-activating overlay listing windows. Never becomes key:
-/// all input arrives through the global CGEventTap, Contexts-style.
+/// all input arrives through the global CGEventTap.
 final class SwitcherPanelController {
     /// One overlay per display: sub-rows + its own panel window.
     private final class ScreenPanel {
@@ -347,7 +347,7 @@ final class SwitcherPanelController {
             stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
             caretTimer?.invalidate()
             caretTimer = nil
-            // Search box sits on top (Raycast/Contexts layout), rows below.
+            // Search box sits on top (Raycast layout), rows below.
             let searchHeight = searchQuery.isEmpty ? 0 : buildSearchSection()
             var headerCount = 0
             rowViews = rows.enumerated().map { off, wm in
@@ -399,7 +399,7 @@ final class SwitcherPanelController {
             ])
         }
 
-        /// Search section (Contexts Command-Tab): rounded query box with a
+        /// Search section (Command-Tab): rounded query box with a
         /// blinking caret, full-width hairline divider, centered "All Results".
         /// Returns its total height.
         private func buildSearchSection() -> CGFloat {
@@ -517,7 +517,7 @@ final class SwitcherPanelController {
         setSelection(globalIdx)
     }
 
-    /// Click commits immediately (Contexts: click a row → activate it).
+    /// Click commits immediately (click a row → activate it).
     private func clickCommit(_ globalIdx: Int) {
         guard index.indices.contains(globalIdx) else { return }
         setSelection(globalIdx)
@@ -546,7 +546,7 @@ final class SwitcherPanelController {
         index = []
 
         // Panel display scope: all displays / primary only / active display
-        // (the screen currently holding the mouse, Contexts behavior).
+        // (the screen currently holding the mouse).
         let allScreens = NSScreen.screens.isEmpty ? [NSScreen.main].compactMap { $0 } : NSScreen.screens
         let screens: [NSScreen]
         switch PrefsStore.panelDisplay {
@@ -712,7 +712,7 @@ final class SwitcherSession {
     /// trigger is being held; nil when no hold is in progress.
     private var holdSideBits: UInt32?
     /// The shortcut that opened the panel: its combo cycles forward while
-    /// held, and its siblings' move-up combos cycle back (Contexts pairing).
+    /// held, and its siblings' move-up combos cycle back (paired).
     private var activeTrigger: PrefsStore.TriggerShortcut?
     /// Pending delayed-open task ("show panel after a slight delay").
     private var openTask: DispatchWorkItem?
@@ -839,7 +839,7 @@ final class SwitcherSession {
         }
     }
 
-    /// Contexts "show panel after a slight delay": schedules instead of showing
+    /// "show panel after a slight delay": schedules instead of showing
     /// immediately; releasing the trigger before the delay elapses commits the
     /// last-used window directly (quick tap = quick switch).
     func openDelayed(selectNext: Bool = false) {
@@ -950,7 +950,7 @@ final class SwitcherSession {
         rows = rows.filter { !$0.ignored } + rows.filter(\.ignored)
         topIsRemembered = false
         guard !searchQuery.isEmpty else { return rows }
-        // Search ranks, never filters (Contexts): best match first, stable.
+        // Search ranks, never filters: best match first, stable.
         let q = searchQuery
         var ranked = rows.enumerated().map { (i: $0.offset, wm: $0.element,
             sc: max(SearchText.score(app: $0.element.displayName, title: $0.element.title, query: q),
@@ -973,7 +973,7 @@ final class SwitcherSession {
     private func renderFromTracker(selectFirst: Bool) -> Bool {
         let rows = trackerRows()
         // Search left zero matches: keep the panel open showing only the
-        // search section (Contexts behavior) instead of tearing it down.
+        // search section instead of tearing it down.
         if rows.isEmpty, !searchQuery.isEmpty {
             isOpen = true
             panel.show([], query: searchQuery)
@@ -997,7 +997,7 @@ final class SwitcherSession {
 
     /// Quick double-press while the delayed open is still pending: switch
     /// straight to the previous window without ever showing the panel
-    /// (Contexts "slight delay" behavior).
+    /// ("slight delay").
     func openInstantCommit() {
         openTask?.cancel()
         openTask = nil
@@ -1127,7 +1127,7 @@ final class SwitcherSession {
             if acted { actOnSelected(.hide) }
             return acted
         }
-        // Contexts move-up pairing: while the panel is open, any enabled
+        // Move-up pairing: while the panel is open, any enabled
         // shortcut's move-up combo cycles back (e.g. ⌘` while holding ⌘Tab,
         // or a recorded ⌃Tab arriving as ⌘⌃Tab under a ⌘Tab hold). The
         // event's flags carry every physically held modifier, so match the

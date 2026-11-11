@@ -12,9 +12,9 @@ struct WindowModel {
     let frame: CGRect
     let minimized: Bool
     let ax: AXUIElement?
-    /// App is currently hidden via Cmd+H (Contexts "hidden apps" filter).
+    /// App is currently hidden via Cmd+H ("hidden apps" filter).
     var appHidden: Bool = false
-    /// App has no windows of its own (Contexts "windowless apps" filter).
+    /// App has no windows of its own ("windowless apps" filter).
     var windowless: Bool = false
     /// Rules alias for the app-name column (nil = show `appLocalName`). It
     /// drives the quick-go hint letter; search matches both it and the real
@@ -104,7 +104,7 @@ func enumerateWindows() -> [WindowModel] {
     var out: [WindowModel] = []
     for app in NSWorkspace.shared.runningApplications {
         // Accessory (menu-bar, LSUIElement) apps carry real windows too — this
-        // app's own Preferences window, Contexts' sidebar, 1Password. Only
+        // app's own Preferences window, the sidebar, 1Password. Only
         // .prohibited helpers are skipped.
         guard app.activationPolicy == .regular || app.activationPolicy == .accessory else { continue }
         let isRegular = app.activationPolicy == .regular
@@ -220,7 +220,7 @@ private func beginActivation(_ wm: WindowModel) {
 
 private func verifyActivation(_ wm: WindowModel, timeout: TimeInterval) -> (title: String, verified: Bool) {
     // macOS 14+ cooperative activation rejects focus steals from non-app processes.
-    // Fallback: System Events Apple Event (the route Contexts itself is entitled for).
+    // Fallback: System Events Apple Event (the route the app is entitled for).
     func frontmostIsTarget() -> Bool {
         NSWorkspace.shared.frontmostApplication?.processIdentifier == wm.pid
     }
@@ -262,7 +262,7 @@ private func axButton(_ ax: AXUIElement, _ attr: String) -> AXUIElement? {
     return (v as! AXUIElement)
 }
 
-/// Close window (⌥W in Contexts defaults).
+/// Close window (⌥W by default).
 @discardableResult
 func closeWindow(_ wm: WindowModel) -> Bool {
     guard let ax = wm.ax else { return false }
