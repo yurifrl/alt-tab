@@ -142,7 +142,7 @@ func enumerateWindows() -> [WindowModel] {
             if let sub = axString(axCopy(w, kAXSubroleAttribute)),
                nonSwitchableSubroles.contains(sub) { continue }
             // Titles can embed newlines (Chrome bubbles); keep rows single-line.
-            let title = (axString(axCopy(w, kAXTitleAttribute)) ?? "")
+            var title = (axString(axCopy(w, kAXTitleAttribute)) ?? "")
                 .components(separatedBy: .newlines).joined(separator: " ")
             // Accessory apps list utility surfaces too — untitled menu-bar
             // strips and overlay hooks (MenuBarAgent, Grammarly, TypeWhisper).
@@ -150,6 +150,10 @@ func enumerateWindows() -> [WindowModel] {
             // sit on CG layers ≥ 1 (strips 24/25, Grammarly overlay 1), and
             // real surfaces (Preferences panes, 1Password) sit on layer 0.
             if !isRegular && title.isEmpty { continue }
+            // Chrome PWA (app-mode) windows such as Google Meet are standard
+            // windows with an empty AXTitle; label them with the app name so
+            // the title-based switcher filters don't drop them.
+            if title.isEmpty { title = app.localizedName ?? "" }
             let minimized = (axCopy(w, kAXMinimizedAttribute) as? Bool) ?? false
             var frame = CGRect.zero
             if let p = axPoint(axCopy(w, kAXPositionAttribute)),
