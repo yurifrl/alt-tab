@@ -8,6 +8,10 @@ import ServiceManagement
 final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTableViewDelegate, NSTableViewDataSource, NSTextFieldDelegate {
     static let shared = PrefsWindowController()
 
+    // General pane
+    private let loginCheck = NSButton(checkboxWithTitle: "Start AltTab at login", target: nil, action: nil)
+    private let loginHelp = NSTextField(wrappingLabelWithString: "Keeps AltTab running in the background from login, so the switcher shortcuts are ready right after a restart.")
+
     // Command-Tab pane — shortcut list: an "Or"/"Shortcut"
     // table on the left, the selected row's activate/move-up chips to its
     // right, +/− for custom triggers below.
@@ -39,7 +43,6 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
     private let activeOnlyCheck = NSButton(checkboxWithTitle: "List only windows on the display with the mouse", target: nil, action: nil)
     private let hoverCheck = NSButton(checkboxWithTitle: "Hovering a row selects it", target: nil, action: nil)
     private let ignoreMouseCheck = NSButton(checkboxWithTitle: "Ignore the mouse (no hover, click or scroll in the panel)", target: nil, action: nil)
-    private let loginCheck = NSButton(checkboxWithTitle: "Start AltTab at login", target: nil, action: nil)
     private let scrollCheck = NSButton(checkboxWithTitle: "Scroll wheel moves the selection", target: nil, action: nil)
     private let indicatorPopup = NSPopUpButton(frame: .zero)
     private let minimizedPopup = NSPopUpButton(frame: .zero)
@@ -112,6 +115,13 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
     private func buildIfNeeded() {
         guard !built else { return }
         built = true
+
+        // General pane -------------------------------------------------------
+        loginCheck.target = self; loginCheck.action = #selector(loginToggled(_:))
+        let generalGrid = NSGridView(views: [
+            [NSGridCell.emptyContentView, loginCheck],
+            [NSGridCell.emptyContentView, loginHelp],
+        ])
 
         // Command-Tab pane -------------------------------------------------
         themePopup.addItems(withTitles: ["Auto", "Vibrant Light", "Vibrant Dark"])
@@ -193,7 +203,6 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
         activeOnlyCheck.target = self; activeOnlyCheck.action = #selector(activeOnlyToggled(_:))
         hoverCheck.target = self; hoverCheck.action = #selector(hoverToggled(_:))
         scrollCheck.target = self; scrollCheck.action = #selector(scrollToggled(_:))
-        loginCheck.target = self; loginCheck.action = #selector(loginToggled(_:))
         ignoreMouseCheck.target = self; ignoreMouseCheck.action = #selector(ignoreMouseToggled(_:))
         indicatorPopup.addItems(withTitles: ["Search hints", "Numbers 1–9", "Neither"])
         for p in [minimizedPopup, hiddenPopup, windowlessPopup] {
@@ -212,7 +221,6 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
             [NSGridCell.emptyContentView, hoverCheck],
             [NSGridCell.emptyContentView, scrollCheck],
             [NSGridCell.emptyContentView, ignoreMouseCheck],
-            [NSGridCell.emptyContentView, loginCheck],
         ])
 
         // Rules pane -----------------------------------------------------------
@@ -241,7 +249,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
         // NSInternalInconsistencyException, which AppKit's menu dispatch
         // swallows, silently abandoning the rest of buildIfNeeded.
         for c in tickLabels.arrangedSubviews { (c as? NSTextField)?.alignment = .center }
-        for h in [groupHelp, countHelp, windowlessHelp, delayHelp, ignoredHelp] {
+        for h in [loginHelp, groupHelp, countHelp, windowlessHelp, delayHelp, ignoredHelp] {
             h.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
             h.textColor = .secondaryLabelColor
             h.preferredMaxLayoutWidth = 340
@@ -261,7 +269,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
             [NSGridCell.emptyContentView, ignoredHelp],
         ])
 
-        for grid in [cmdTabGrid, panelGrid, rulesGrid] {
+        for grid in [generalGrid, cmdTabGrid, panelGrid, rulesGrid] {
             grid.rowSpacing = 10
             grid.columnSpacing = 12
             grid.column(at: 0).xPlacement = .trailing
@@ -269,6 +277,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
 
         let tabs = NSTabView(frame: NSRect(x: 0, y: 0, width: 540, height: 360))
         tabView = tabs
+        tabs.addTabViewItem(tab("General", generalGrid))
         tabs.addTabViewItem(tab("Command-Tab", cmdTabGrid))
         tabs.addTabViewItem(tab("Panel", panelGrid))
         tabs.addTabViewItem(tab("Rules", rulesGrid, height: 620))

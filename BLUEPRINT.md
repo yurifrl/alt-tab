@@ -11,6 +11,7 @@
 | Gestures | Double-touch trackpad switch (private MultitouchSupport) | P3 |
 | Search | Fuzzy title search in switcher | P3 |
 | Prefs | `CTPreference*`-style UserDefaults keys; per-pane UI | P2 |
+| Login item | Start at login via `SMAppService` (macOS 13+); toggle in Prefs ▸ General | P2 |
 | Appearance | Vibrant Dark/Light themes | P2 |
 
 Explicitly **dropped**: Realm persistence (overkill — SQLite/SwiftData/files suffice), AppCenter telemetry (never ship), Sparkle (reuse directly — open source), RSA license scheme (not applicable).
