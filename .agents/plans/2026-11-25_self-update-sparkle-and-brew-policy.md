@@ -36,9 +36,9 @@ Decisions this plan implements:
 
 1. Extract Sparkle 2.10.1 tarball, then from its `bin/`:
    - `./generate_keys` → writes the `ed25519` private key to the login Keychain, prints the public key.
-   - `./generate_keys -x /tmp/sparkle_ed_private.txt` → exports the private key.
+   - `./generate_keys -x ~/Downloads/alt-tab-sparkle-private-key.txt` → exports the private key (done).
 2. Store both keys in 1Password. The public key is permanent: every installed build trusts only the key baked into it, and losing the private key means existing installs can never be updated again (one-time manual reinstall to recover).
-3. `gh secret set SPARKLE_ED_PRIVATE_KEY < /tmp/sparkle_ed_private.txt`, then `rm` the file.
+3. `gh secret set SPARKLE_ED_PRIVATE_KEY < ~/Downloads/alt-tab-sparkle-private-key.txt`, then `rm` the file. (The generated key is already at that path: 44 bytes, no trailing newline; `generate_appcast` also tolerates a trailing newline — verified locally against the real toolchain.)
 4. Fine-grained PAT (`contents: write` on `yurifrl/homebrew-casks`) → `gh secret set HOMEBREW_TAP_TOKEN`.
 5. Put the public key into `Support/Info.plist` (step 2).
 
@@ -230,11 +230,11 @@ Verify: after the next release, `brew info --cask yurifrl-alt-tab` shows the new
 - First Sparkle-bearing release must be a **new version** (0.2.0): the 0.1.0 build has no updater, so it needs one manual/brew step. Note it in the 0.2.0 release notes.
 - Bump `VERSION` to 0.2.0 on main → tag → release + appcast + cask bump.
 - Install 0.2.0 (`brew install --cask yurifrl-alt-tab`), confirm menu item + "You're up to date".
-- Bump to 0.2.1, confirm from the 0.2.0 install: check → download → EdDSA verify → install → relaunch, and that the Accessibility grant survives (signature-based, unchanged Team ID).
+- Bump to 0.2.1, confirm from the 0.2.0 install: check → the update window shows the curated `CHANGELOG.md` section plus the commit appendix → download → EdDSA verify → install → relaunch, and that the Accessibility grant survives (signature-based, unchanged Team ID).
 
 ### 10. Cleanup
 
-Remove the throwaway key file (`/tmp/sparkle_ed_private.txt`) after importing into 1Password + CI; no scratch dirs left in the repo.
+Remove the throwaway key file (`~/Downloads/alt-tab-sparkle-private-key.txt`) after importing into 1Password + CI; no scratch dirs left in the repo.
 
 ## Verification
 
