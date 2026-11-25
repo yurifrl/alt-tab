@@ -1,0 +1,33 @@
+/* Sketch theme — AltTab prefs, stock macOS System Settings look (light). */
+:root {
+  /* Surfaces */
+  --mac-window: #ececec;
+  --mac-sel: #dcdcde;
+  --mac-sep: #d9d9d9;
+  --mac-track: #e9e9e9;
+
+  /* Text */
+  --mac-text: #1d1d1f;
+  --mac-text-2: #3c3c43;
+  --mac-muted: #8a8a8e;
+
+  /* Controls */
+  --mac-border: #c9c9c9;
+  --mac-border-soft: #dcdcde;
+  --mac-accent: #2f6fed;
+  --mac-danger: #d93036;
+  --mac-success: #34c759;
+
+  /* Type */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Shape */
+  --r-5: 5px;
+  --r-6: 6px;
+  --r-8: 8px;
+
+  /* Shadow */
+  --sh-control: 0 1px 1px rgba(0, 0, 0, .05);
+  --sh-window: 0 18px 45px rgba(0, 0, 0, .22), 0 2px 6px rgba(0, 0, 0, .12);
+}
