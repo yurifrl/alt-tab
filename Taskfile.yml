@@ -2,9 +2,10 @@ version: '3'
 
 tasks:
   build:
-    desc: Build the release binary
+    desc: Build the release binary and stage Sparkle.framework for unpackaged runs
     cmds:
       - swift build -c release
+      - scripts/stage-sparkle.sh
 
   install:
     desc: Build release and assemble+sign AltTab.app into /Applications (-- -l links to ~/Applications instead)

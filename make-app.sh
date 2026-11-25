@@ -38,6 +38,27 @@ chmod +x "$BUNDLE/Contents/MacOS/AltTab"
 # survives rebuilds (ad-hoc "-" signing changed the identity on every build,
 # which silently invalidated previously granted permissions).
 IDENTITY="${ALTTAB_SIGN_IDENTITY:-Developer ID Application: Yuri Freire Lima (U9WN2GW95A)}"
+
+# Sparkle: embed the framework and re-sign it inside-out with the app's
+# identity (Xcode's "Embed & Sign" equivalent). The shipped framework is
+# ad-hoc signed with no Team ID, which Library Validation rejects on the
+# hardened-runtime app; nested code keeps its entitlements when re-signed.
+XC="$(find .build/artifacts -maxdepth 4 -name 'Sparkle.xcframework' -print -quit)"
+[[ -n "$XC" ]] || { echo "Sparkle.xcframework missing — swift package resolve first" >&2; exit 1; }
+mkdir -p "$BUNDLE/Contents/Frameworks"
+rm -rf "$BUNDLE/Contents/Frameworks/Sparkle.framework"
+cp -R "$XC/macos-arm64_x86_64/Sparkle.framework" "$BUNDLE/Contents/Frameworks/"
+
+FW="$BUNDLE/Contents/Frameworks/Sparkle.framework"
+codesign --force --options runtime --preserve-metadata=entitlements \
+  --sign "$IDENTITY" \
+  "$FW/Versions/B/Autoupdate" \
+  "$FW/Versions/B/XPCServices/Downloader.xpc" \
+  "$FW/Versions/B/XPCServices/Installer.xpc" \
+  "$FW/Versions/B/Updater.app" \
+  "$FW"
+codesign --verify --strict --verbose=2 "$FW"
+
 codesign --force --options runtime --sign "$IDENTITY" "$BUNDLE"
 codesign --verify --strict "$BUNDLE"
 
