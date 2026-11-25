@@ -24,5 +24,13 @@
 	<true/>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>SUFeedURL</key>
+	<string>https://github.com/yurifrl/alt-tab/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>ort2t+GgZgNrgil7qrez3sfsyeJtg1cWeWlEVDCUGu0=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<false/>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
 </dict>
 </plist>

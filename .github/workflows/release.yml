@@ -37,6 +37,8 @@ jobs:
           ASC_API_KEY_P8_BASE64: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           : "${DEVELOPER_ID_APPLICATION:?repo var DEVELOPER_ID_APPLICATION is required}"
@@ -45,6 +47,8 @@ jobs:
           : "${ASC_API_KEY_P8_BASE64:?secret ASC_API_KEY_P8_BASE64 is required}"
           : "${ASC_KEY_ID:?secret ASC_KEY_ID is required}"
           : "${ASC_ISSUER_ID:?secret ASC_ISSUER_ID is required}"
+          : "${HOMEBREW_TAP_TOKEN:?secret HOMEBREW_TAP_TOKEN is required - the pinned cask must be bumped}"
+          : "${SPARKLE_ED_PRIVATE_KEY:?secret SPARKLE_ED_PRIVATE_KEY is required - the appcast must be signed}"
           P12_PATH="$RUNNER_TEMP/signing.p12"
           KEYCHAIN_PATH="$RUNNER_TEMP/release.keychain-db"
           printf '%s' "$MACOS_SIGNING_P12_BASE64" | base64 --decode > "$P12_PATH"
@@ -158,15 +162,37 @@ jobs:
           echo "SHA256=$SHA" >> "$GITHUB_ENV"
           echo "$SHA  $DMG"
 
+      - name: Generate the signed Sparkle appcast
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          GEN="$(find .build/artifacts -maxdepth 4 -path '*/bin/generate_appcast' -print -quit)"
+          [[ -n "$GEN" ]] || { echo "generate_appcast missing - swift package resolve first" >&2; exit 1; }
+          STAGE="$RUNNER_TEMP/appcast"
+          mkdir -p "$STAGE"
+          cp AltTab.dmg "$STAGE/"
+          # Key over stdin so it never exists as a file mid-job.
+          printf '%s' "$SPARKLE_ED_PRIVATE_KEY" | "$GEN" --ed-key-file - \
+            --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/$TAG/" \
+            --link "https://github.com/${GITHUB_REPOSITORY}" \
+            "$STAGE"
+          # Sparkle silently skips signing when the app in the archive has no
+          # SUPublicEDKey; unsigned feed items are rejected by every client, so
+          # fail the release instead of publishing a feed nobody can install.
+          grep -q 'sparkle:edSignature=' "$STAGE/appcast.xml" \
+            || { echo "appcast is not EdDSA-signed" >&2; exit 1; }
+          echo "APPCAST=$STAGE/appcast.xml" >> "$GITHUB_ENV"
+
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" AltTab.dmg --clobber
+            gh release upload "$TAG" AltTab.dmg "$APPCAST" --clobber
           else
-            gh release create "$TAG" AltTab.dmg --verify-tag --generate-notes --title "AltTab $VERSION"
+            gh release create "$TAG" AltTab.dmg "$APPCAST" --verify-tag --generate-notes --title "AltTab $VERSION"
           fi
 
       - name: Bump pinned Homebrew cask
@@ -174,10 +200,7 @@ jobs:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           set -euo pipefail
-          if [[ -z "$TAP_TOKEN" ]]; then
-            echo "::warning::HOMEBREW_TAP_TOKEN not set; pinned cask not bumped (latest cask is unaffected)"
-            exit 0
-          fi
+          : "${TAP_TOKEN:?secret HOMEBREW_TAP_TOKEN is required - the pinned cask must be bumped}"
           git clone "https://x-access-token:${TAP_TOKEN}@github.com/yurifrl/homebrew-casks.git" "$RUNNER_TEMP/tap"
           cd "$RUNNER_TEMP/tap"
           CASK="Casks/yurifrl-alt-tab.rb"

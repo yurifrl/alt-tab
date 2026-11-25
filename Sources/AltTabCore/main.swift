@@ -634,6 +634,7 @@ func runAgent() {
     let reopenDelegate = ReopenDelegate()
     app.delegate = reopenDelegate
     objc_setAssociatedObject(app, "reopenDelegate", reopenDelegate, .OBJC_ASSOCIATION_RETAIN)
+    let updaterAvailable = Updater.shared.start()
     let menu = NSMenu()
     let title = NSMenuItem(title: "alt-tab — running", action: nil, keyEquivalent: "")
     title.isEnabled = false
@@ -643,6 +644,14 @@ func runAgent() {
                               action: #selector(AgentActions.openSwitcher), keyEquivalent: "")
     openItem.target = actions
     menu.addItem(openItem)
+    // Omitted when unpackaged (`swift run` demos), where Sparkle has no bundle.
+    if updaterAvailable {
+        let updatesItem = NSMenuItem(title: "Check for Updates…",
+                                     action: #selector(Updater.checkForUpdates),
+                                     keyEquivalent: "")
+        updatesItem.target = Updater.shared
+        menu.addItem(updatesItem)
+    }
     let prefsItem = NSMenuItem(title: "Preferences…",
                                action: #selector(AgentActions.showPrefs),
                                keyEquivalent: ",")
