@@ -81,10 +81,12 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
 
     private var prefsWindow: NSWindow {
         if let w = window { return w }
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 660),
-                         styleMask: [.titled, .closable],
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 660),
+                         styleMask: [.titled, .closable, .resizable],
                          backing: .buffered, defer: false)
         w.title = "alt-tab Preferences"
+        // 560 × 660 is the layout's designed size: the window only grows.
+        w.contentMinSize = NSSize(width: 560, height: 660)
         w.delegate = self
         w.isReleasedWhenClosed = false
         window = w
