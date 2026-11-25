@@ -162,6 +162,11 @@ jobs:
           echo "SHA256=$SHA" >> "$GITHUB_ENV"
           echo "$SHA  $DMG"
 
+      - name: Assemble the release notes
+        run: |
+          set -euo pipefail
+          bash scripts/release-notes.sh "$TAG" "$TAG" RELEASE_NOTES.md
+
       - name: Generate the signed Sparkle appcast
         env:
           SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
@@ -172,16 +177,20 @@ jobs:
           STAGE="$RUNNER_TEMP/appcast"
           mkdir -p "$STAGE"
           cp AltTab.dmg "$STAGE/"
+          cp RELEASE_NOTES.md "$STAGE/AltTab.md"
           # Key over stdin so it never exists as a file mid-job.
           printf '%s' "$SPARKLE_ED_PRIVATE_KEY" | "$GEN" --ed-key-file - \
             --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/$TAG/" \
             --link "https://github.com/${GITHUB_REPOSITORY}" \
+            --embed-release-notes \
             "$STAGE"
           # Sparkle silently skips signing when the app in the archive has no
           # SUPublicEDKey; unsigned feed items are rejected by every client, so
           # fail the release instead of publishing a feed nobody can install.
           grep -q 'sparkle:edSignature=' "$STAGE/appcast.xml" \
             || { echo "appcast is not EdDSA-signed" >&2; exit 1; }
+          grep -q 'sparkle:format="markdown"' "$STAGE/appcast.xml" \
+            || { echo "release notes were not embedded in the appcast" >&2; exit 1; }
           echo "APPCAST=$STAGE/appcast.xml" >> "$GITHUB_ENV"
 
       - name: Publish GitHub Release
@@ -190,9 +199,10 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file RELEASE_NOTES.md
             gh release upload "$TAG" AltTab.dmg "$APPCAST" --clobber
           else
-            gh release create "$TAG" AltTab.dmg "$APPCAST" --verify-tag --generate-notes --title "AltTab $VERSION"
+            gh release create "$TAG" AltTab.dmg "$APPCAST" --verify-tag --notes-file RELEASE_NOTES.md --title "AltTab $VERSION"
           fi
 
       - name: Bump pinned Homebrew cask
@@ -211,3 +221,27 @@ jobs:
           git diff --cached --quiet && { echo "cask already up to date"; exit 0; }
           git commit -m "yurifrl-alt-tab $VERSION"
           git push origin HEAD
+
+      - name: Stamp the released section in CHANGELOG.md
+        run: |
+          set -euo pipefail
+          if grep -q "^## \[$VERSION\]" CHANGELOG.md; then
+            echo "CHANGELOG.md already has [$VERSION]; nothing to stamp"
+            exit 0
+          fi
+          git fetch origin main
+          if ! git diff --quiet "$TAG" origin/main -- CHANGELOG.md; then
+            echo "::warning::CHANGELOG.md changed on main since $TAG; skipping the stamp (move the released bullets under [$VERSION] manually)"
+            exit 0
+          fi
+          git checkout -B main origin/main
+          awk -v ver="$VERSION" -v d="$(date -u +%F)" '
+            !done && $0 == "## [Unreleased]" { print; print ""; print "## [" ver "] - " d; done = 1; next }
+            { print }
+          ' CHANGELOG.md > CHANGELOG.md.tmp
+          mv CHANGELOG.md.tmp CHANGELOG.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git commit -m "docs(changelog): stamp $TAG"
+          git push origin main

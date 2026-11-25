@@ -54,6 +54,8 @@ Unpackaged runs (`swift run` / the `AltTabCore` demo modes) need `task build` fi
 
 Bump the `VERSION` file and merge to `main`. The **Tag** workflow creates `vX.Y.Z`, and the **Release** workflow builds a universal, Developer ID signed and notarized `AltTab.dmg`, publishes the GitHub Release, and bumps the pinned cask in [yurifrl/homebrew-casks](https://github.com/yurifrl/homebrew-casks).
 
+The GitHub Release body and the in-app update notes are the same text: the curated `CHANGELOG.md` section for the version, followed by the commit log since the previous tag (assembled by `scripts/release-notes.sh`). The workflow stamps the released section as `## [X.Y.Z] - <date>` in `CHANGELOG.md` on `main` afterwards.
+
 Required repo configuration:
 
 | Kind | Name |
