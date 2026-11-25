@@ -1,0 +1,740 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sketch 002 — Match attributes &amp; more details</title>
+<link rel="stylesheet" href="../themes/default.css">
+<style>
+  body{margin:0;background:#f4f4f5;font-family:var(--font-sans);color:var(--mac-text);-webkit-font-smoothing:antialiased}
+  button,input,select{font-family:inherit}
+
+  /* ---- variant nav ---- */
+  #variant-nav{position:fixed;top:0;left:0;right:0;height:46px;display:flex;align-items:center;gap:8px;padding:0 14px;background:#fff;border-bottom:1px solid #e4e4e7;z-index:9998;font-size:13px}
+  #variant-nav .brand{font-weight:600;color:var(--mac-muted);margin-right:6px;font-size:12.5px}
+  .variant-tab{border:1px solid #d8d8dc;background:#fff;border-radius:999px;padding:5px 12px;font-size:12.5px;color:var(--mac-text-2);cursor:pointer;transition:all .15s ease}
+  .variant-tab:hover{background:#f4f4f5}
+  .variant-tab.active{background:#1d1d1f;border-color:#1d1d1f;color:#fff}
+
+  .stage{padding:64px 20px 56px;display:flex;justify-content:center;transform-origin:top center}
+  .variant{display:none}
+  .variant.active{display:block}
+
+  /* ---- window ---- */
+  .window{width:680px;background:var(--mac-window);border:1px solid rgba(0,0,0,.18);border-radius:12px;box-shadow:var(--sh-window);overflow:hidden;user-select:none}
+  .titlebar{height:38px;display:flex;align-items:center;padding:0 14px;position:relative}
+  .lights{display:flex;gap:8px}
+  .light{width:12px;height:12px;border-radius:50%}
+  .light.r{background:#ff5f57}.light.y{background:#febc2e}.light.g{background:#28c840}
+  .wtitle{position:absolute;left:0;right:0;text-align:center;font-size:13px;font-weight:600;color:#6e6e73}
+  .content{display:flex;min-height:600px}
+  .sidebar{width:190px;border-right:1px solid var(--mac-sep);padding:10px 8px;box-sizing:border-box}
+  .lrow{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;margin-bottom:2px}
+  .lrow.sel{background:var(--mac-sel)}
+  .licon{width:24px;height:24px;border-radius:6px;background:#2f2f31;color:#fff;display:flex;align-items:center;justify-content:center;font-size:8.5px;font-weight:700;flex:none;letter-spacing:.5px}
+  .ltext{min-width:0}
+  .lname{font-size:13px;color:var(--mac-text)}
+  .lsub{font-size:11px;color:var(--mac-muted);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .detail{flex:1;padding:16px 20px 18px;box-sizing:border-box;min-width:0}
+
+  /* ---- form ---- */
+  .fhead{display:flex;align-items:center;gap:10px}
+  .ficon{width:28px;height:28px;border-radius:7px;font-size:10px}
+  .fname{font-size:15px;font-weight:600}
+  .fbundle{font-size:11px;color:var(--mac-muted);margin-top:1px}
+  .seclabel{font-size:10.5px;font-weight:600;color:var(--mac-muted);letter-spacing:.4px;margin:16px 0 6px}
+  .fhead + .seclabel{margin-top:14px}
+
+  .seg{display:flex;background:var(--mac-track);border:1px solid #d0d0d3;border-radius:6px;padding:2px;gap:1px}
+  .seg-item{flex:1;text-align:center;font-size:13px;padding:3px 0;border-radius:4.5px;color:var(--mac-text-2);cursor:pointer;transition:background .12s ease}
+  .seg-item:hover{background:rgba(255,255,255,.6)}
+  .seg-item.sel{background:#fff;box-shadow:0 0 0 .5px rgba(0,0,0,.18),0 1px 2px rgba(0,0,0,.10)}
+
+  .popup{position:relative;display:inline-flex;align-items:center;gap:5px;background:#fff;border:1px solid var(--mac-border);border-radius:5px;height:22px;padding:0 5px 0 7px;font-size:13px;color:var(--mac-text);cursor:pointer;box-shadow:var(--sh-control);transition:background .12s ease;flex:none}
+  .popup:hover{background:#f6f6f7}
+  .popup.open{background:#ececee}
+  .chev{width:8px;height:11px;position:relative;flex:none}
+  .chev::before,.chev::after{content:"";position:absolute;left:0;border-left:4px solid transparent;border-right:4px solid transparent}
+  .chev::before{top:1px;border-bottom:5px solid var(--mac-accent)}
+  .chev::after{bottom:1px;border-top:5px solid var(--mac-accent)}
+
+  .rowwrap{position:relative}
+  .mled{margin-top:10px}
+  .mlhead{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--mac-text-2)}
+  .mlhead .btn{margin-left:auto}
+  .any-popup{min-width:58px}
+  .mlbox{margin-top:6px;background:#fff;border:1px solid var(--mac-border-soft);border-radius:8px;padding:5px 5px 0;box-shadow:var(--sh-control)}
+  .mlrows:empty::before{content:"No matchers yet — add one or click a value below";display:block;font-size:11.5px;color:var(--mac-muted);padding:6px 6px 2px}
+  .mrowwrap{display:flex;flex-direction:column}
+  .mrow{display:flex;align-items:center;gap:6px;padding:4px;border-radius:6px;transition:background .12s ease}
+  .mrow.focus{background:rgba(47,111,237,.07);box-shadow:inset 0 0 0 1px rgba(47,111,237,.28)}
+  .mrow.flash .pattern{border-color:var(--mac-accent);box-shadow:0 0 0 3px rgba(47,111,237,.22)}
+  .attr-popup{min-width:74px}
+  .kind-popup{min-width:88px}
+  .mlfoot{display:flex;border-top:1px solid #f0f0f2;margin-top:3px;padding:5px 2px 3px}
+  .add-matcher{font-size:11.5px;height:20px}
+  .tfield{flex:1;min-width:0;height:22px;border:1px solid var(--mac-border);border-radius:5px;background:#fff;font-size:13px;padding:0 6px;color:var(--mac-text);box-sizing:border-box}
+  .tfield:focus{outline:none;border-color:#3b82f6;box-shadow:0 0 0 2.5px rgba(59,130,246,.22)}
+  .tfield.mono{font-family:var(--font-mono);font-size:12.5px}
+  .tfield.invalid{border-color:#e5484d;box-shadow:0 0 0 2.5px rgba(229,72,77,.16)}
+  .rowerr{font-size:11px;color:var(--mac-danger);margin:0 4px 3px 6px}
+  .rowerr[hidden]{display:none}
+
+  .sqbtn{width:22px;height:22px;flex:none;border:1px solid var(--mac-border);background:linear-gradient(#fff,#f6f6f6);border-radius:5px;font-size:13px;line-height:1;color:var(--mac-text-2);cursor:pointer;box-shadow:var(--sh-control)}
+  .sqbtn:hover{background:#efeff1}
+  .btn{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 9px;border:1px solid var(--mac-border);background:linear-gradient(#fff,#f6f6f6);border-radius:5px;font-size:12.5px;color:var(--mac-text);cursor:pointer;box-shadow:var(--sh-control);flex:none}
+  .btn:hover{background:#efeff1}
+
+  .hintline{display:flex;align-items:center;gap:10px;font-size:11px;color:var(--mac-muted);margin-top:8px}
+  .discl{display:inline-flex;align-items:center;gap:5px;margin-left:auto;background:none;border:none;padding:0;font-size:11px;font-weight:500;color:var(--mac-accent);cursor:pointer}
+  .discl:hover{text-decoration:underline}
+  .tri{width:0;height:0;flex:none;border-left:4.5px solid transparent;border-right:4.5px solid transparent;border-top:5.5px solid var(--mac-muted);transform:rotate(-90deg);transition:transform .15s ease}
+  .discl .tri{border-top-color:var(--mac-accent)}
+  .discl.open .tri,.debugbtn.on .tri,.drawer.open .tri{transform:rotate(0)}
+  .debugbtn.on{background:#e7efff;border-color:var(--mac-accent);color:var(--mac-accent)}
+
+  /* ---- A: inline debug list ---- */
+  .debugbox{margin-top:9px;background:#fff;border:1px solid var(--mac-border-soft);border-radius:8px;overflow:hidden}
+  .dbhead{padding:7px 10px 4px;font-size:10px;font-weight:600;letter-spacing:.4px;color:var(--mac-muted)}
+  .wrow{display:flex;gap:8px;align-items:flex-start;padding:7px 10px;border-top:1px solid #f0f0f2}
+  .wrow.hit{background:rgba(52,199,89,.07)}
+  .wcol{flex:1;min-width:0}
+  .wicon{width:18px;height:18px;border-radius:5px;color:#fff;display:flex;align-items:center;justify-content:center;font-size:7px;font-weight:700;flex:none;letter-spacing:.4px;margin-top:1px}
+  .wchips{display:flex;flex-wrap:wrap;gap:5px}
+  .wattr{display:inline-flex;align-items:center;font-size:11px;color:var(--mac-text-2);background:#f4f4f5;border:1px solid #e3e3e5;border-radius:5px;padding:1px 6px;cursor:pointer;transition:all .12s ease}
+  .wattr:hover{border-color:var(--mac-accent);color:var(--mac-accent)}
+  .wattr.primary{font-weight:600;color:var(--mac-text)}
+  .wattr.mono{font-family:var(--font-mono);font-size:10.5px}
+  .wattr.dim{color:#b3b3b8;background:#fafafa;border-style:dashed;cursor:default}
+  .wattr.dim:hover{border-color:#e3e3e5;color:#b3b3b8}
+  .wattr.used,.wlink.used,.dcell.used{border-color:var(--mac-accent);background:rgba(47,111,237,.12);color:var(--mac-accent)}
+  .whit{margin-left:auto;align-self:center;color:var(--mac-success);font-size:12px;visibility:hidden;flex:none}
+  .wrow.hit .whit{visibility:visible}
+
+  /* ---- B: popover inspector ---- */
+  .popcard{position:absolute;top:30px;right:0;width:352px;background:#fff;border:1px solid rgba(0,0,0,.14);border-radius:10px;box-shadow:0 14px 34px rgba(0,0,0,.20);z-index:60;overflow:hidden}
+  .pcbar{display:flex;align-items:center;gap:8px;padding:8px 10px;background:linear-gradient(#fbfbfc,#f4f4f6);border-bottom:1px solid #ededef}
+  .pcname{font-size:10px;font-weight:600;letter-spacing:.4px;color:var(--mac-text-2)}
+  .pchint{font-size:10.5px;color:var(--mac-muted);margin-left:auto}
+  .pcclose{font-size:9px;color:#9a9a9e;cursor:pointer;padding:1px 4px;border-radius:4px}
+  .pcclose:hover{color:var(--mac-text);background:#e9e9eb}
+  .pcbody{max-height:340px;overflow-y:auto}
+  .wtitle2{font-size:12.5px;font-weight:600;color:var(--mac-text);margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .wmeta{font-size:11px;color:var(--mac-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .wlink{cursor:pointer;border-bottom:1px dotted #c3c3c8}
+  .wlink:hover{color:var(--mac-accent);border-color:var(--mac-accent)}
+  .mono{font-family:var(--font-mono)}
+
+  /* ---- C: bottom drawer ---- */
+  .drawer{margin-top:16px;background:#fff;border:1px solid var(--mac-border-soft);border-radius:8px;overflow:hidden}
+  .drawer:not(.open) .dtable{display:none}
+  .drawerbar{display:flex;align-items:center;gap:8px;padding:8px 10px;cursor:pointer;background:linear-gradient(#fbfbfc,#f4f4f6)}
+  .drawer:not(.open) .drawerbar{border-radius:7px}
+  .dbname{font-size:10px;font-weight:600;letter-spacing:.4px;color:var(--mac-text-2)}
+  .dbhint{font-size:10.5px;color:var(--mac-muted);margin-left:auto}
+  .dthead,.dtrow{display:grid;grid-template-columns:minmax(0,1.6fr) 64px 92px 54px;gap:8px;align-items:center;padding:6px 10px}
+  .dthead{font-size:9.5px;font-weight:600;letter-spacing:.4px;color:var(--mac-muted);background:#fafafb;border-top:1px solid #f0f0f2}
+  .dtrow{border-top:1px solid #f0f0f2}
+  .dtrow:hover{background:#f7f7f9}
+  .dtrow.hit{background:rgba(52,199,89,.07)}
+  .dtrow.hit .dtitle::after{content:"  ✓";color:var(--mac-success)}
+  .dcell{min-width:0;font-size:11.5px;color:var(--mac-text-2);border-radius:4px}
+  .dcell.click{cursor:pointer}
+  .dcell.click:hover{color:var(--mac-accent);background:rgba(47,111,237,.08)}
+  .dcell.num{font-family:var(--font-mono);font-size:11px}
+  .dtitle{font-size:12.5px;font-weight:600;color:var(--mac-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .dsub{font-size:10.5px;color:var(--mac-muted);font-family:var(--font-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .dlink{cursor:pointer;border-bottom:1px dotted #c3c3c8}
+  .dlink:hover{color:var(--mac-accent)}
+
+  /* ---- D: table under the selector row ---- */
+  .dgrid{height:266px;padding:0;display:flex;flex-direction:column;overflow:hidden;margin-top:8px}
+  .dgrid[hidden]{display:none}
+  .dcap{display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid #f0f0f2;background:linear-gradient(#fbfbfc,#f6f6f8)}
+  .dcap .cd{font-size:10px;font-weight:600;letter-spacing:.4px;color:var(--mac-text-2)}
+  .dcap .cn{font-size:10.5px;color:var(--mac-muted);margin-left:auto}
+  .dgrid .dthead{border-top:none}
+  .dbody{flex:1;overflow-y:auto;overscroll-behavior:contain}
+  .dbody .dtrow:first-child{border-top:none}
+  .dbody::-webkit-scrollbar{width:9px}
+  .dbody::-webkit-scrollbar-thumb{background:rgba(0,0,0,.2);border:2px solid transparent;background-clip:content-box;border-radius:5px}
+  .mq{display:inline-block;white-space:nowrap;will-change:transform}
+  .mq.on{animation:mqslide var(--mq-dur,6s) ease-in-out infinite alternate}
+  @keyframes mqslide{from{transform:translateX(0)}to{transform:translateX(var(--mq-dist,0px))}}
+  .dcell[data-attr="title"]:hover .mq.on{animation-play-state:paused}
+  .dtitle.mqclip{text-overflow:clip}
+  .tip{position:fixed;z-index:99999;left:0;top:0;background:rgba(28,28,30,.95);color:#fff;font-size:11.5px;line-height:1.35;padding:4px 8px;border-radius:6px;max-width:440px;pointer-events:none;opacity:0;transition:opacity .12s}
+  .tip.on{opacity:1}
+
+  /* ---- rest of the form ---- */
+  .arow{display:flex;align-items:center;gap:8px}
+  .letterchip{width:22px;height:22px;border:1px solid var(--mac-border);border-radius:5px;background:#fff;display:flex;align-items:center;justify-content:center;font-family:var(--font-mono);font-size:11px;color:var(--mac-muted);flex:none}
+  .dots{display:flex;align-items:center;gap:13px;padding:3px 2px}
+  .dot{width:14px;height:14px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer}
+  .dot.wheel{background:conic-gradient(#ff3b30,#ffcc00,#34c759,#00c7be,#0a84ff,#bf5af2,#ff2d55,#ff3b30);box-shadow:inset 0 0 0 3px #fff,0 0 0 1px #c9c9c9;box-sizing:border-box}
+  .dot.eyedrop{background:#fff}
+  .dot.seldot{box-shadow:0 0 0 2px #fff,0 0 0 3.5px rgba(10,108,255,.55)}
+  .vis{display:flex;align-items:center;gap:8px;font-size:13px}
+  .switch{width:26px;height:15px;border-radius:8px;background:var(--mac-success);position:relative;flex:none}
+  .switch .knob{position:absolute;top:1.5px;right:1.5px;width:12px;height:12px;border-radius:50%;background:#fff;box-shadow:0 1px 1px rgba(0,0,0,.25)}
+  .remove-rule{margin-top:16px}
+
+  .pvcap{font-size:10.5px;font-weight:600;color:var(--mac-muted);letter-spacing:.4px;margin:18px 0 6px}
+  .pvpanel{display:flex;align-items:center;gap:9px;background:#1e1e20;border-radius:8px;padding:9px 11px}
+  .pvtext{flex:1;min-width:0}
+  .pvname{font-size:13px;font-weight:600;color:#fff}
+  .pvsub{font-size:11px;color:#9a9a9e;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pvdot{width:9px;height:9px;border-radius:50%;background:#0a6cff;flex:none}
+
+  /* ---- menus ---- */
+  .menu{position:absolute;top:100%;left:0;margin-top:3px;background:#fff;border:1px solid rgba(0,0,0,.12);border-radius:6px;box-shadow:0 10px 26px rgba(0,0,0,.22);padding:4px;z-index:70;min-width:118px}
+  .mitem{font-size:13px;padding:3px 9px 3px 22px;border-radius:4px;position:relative;cursor:pointer;white-space:nowrap}
+  .mitem:hover{background:var(--mac-accent);color:#fff}
+  .mitem.sel::before{content:"✓";position:absolute;left:7px}
+
+  body.annotate [data-ann]{outline:1.5px dashed rgba(10,110,255,.8);outline-offset:2px;border-radius:2px}
+
+  #sketch-tools{position:fixed;bottom:12px;right:12px;z-index:9999;font-family:system-ui;font-size:12px;background:rgba(0,0,0,.72);color:#fff;padding:7px 10px;border-radius:9px;display:flex;gap:7px;align-items:center;opacity:.45;transition:opacity .2s}
+  #sketch-tools:hover{opacity:1}
+  #sketch-tools select,#sketch-tools button{font-size:11.5px;background:rgba(255,255,255,.12);color:#fff;border:1px solid rgba(255,255,255,.25);border-radius:6px;padding:2px 7px;cursor:pointer}
+  #sketch-tools button.on{background:var(--mac-accent);border-color:var(--mac-accent)}
+</style>
+</head>
+<body>
+
+<div id="variant-nav">
+  <span class="brand">Sketch 002 · match attributes &amp; more details</span>
+  <button class="variant-tab" data-v="a">A · Inline disclosure</button>
+  <button class="variant-tab" data-v="b">B · Popover inspector</button>
+  <button class="variant-tab" data-v="c">C · Bottom drawer</button>
+  <button class="variant-tab" data-v="d">D · Your picks</button>
+</div>
+
+<div class="stage">
+  <div class="variant" data-variant="a"></div>
+  <div class="variant" data-variant="b"></div>
+  <div class="variant" data-variant="c"></div>
+  <div class="variant" data-variant="d"></div>
+</div>
+
+<div id="sketch-tools">
+  <select id="theme-switcher" title="Theme">
+    <option value="default">Default</option>
+  </select>
+  <button data-zoom="1" class="on">Fit</button>
+  <button data-zoom="1.25">125%</button>
+  <button data-zoom="1.5">150%</button>
+  <button id="ann-toggle">Annotate</button>
+</div>
+
+<script>
+/* ================= data ================= */
+const KINDS_TEXT = ["Contains", "Exact", "Starts with", "Ends with", "Regex"];
+const KINDS_NUM = ["Is", "Is not"];
+
+const WINDOWS = [
+  {icon:"S",  bg:"#4a154b", title:"(Dev) — Slack",                     app:"Slack",         bundle:"com.tinyspeck.slackmacgap", id:74821, pid:1183, flags:[]},
+  {icon:"G",  bg:"#24292f", title:"PR #42 · fix panel flicker — GitHub", app:"Google Chrome", bundle:"com.google.Chrome",         id:51204, pid:3302, flags:[]},
+  {icon:">_", bg:"#2f2f31", title:"README.md — alt-tab",                app:"Ghostty",       bundle:"com.mitchellh.ghostty",     id:33187, pid:4421, flags:[]},
+  {icon:"G",  bg:"#24292f", title:"Releases — alt-tab",                 app:"Google Chrome", bundle:"com.google.Chrome",         id:90233, pid:3302, flags:["fullscreen"]},
+  {icon:"M",  bg:"#1d6ff2", title:"Inbox (3) — Mail",                   app:"Mail",          bundle:"com.apple.mail",            id:12094, pid:501,  flags:["minimized"]},
+  {icon:"VS", bg:"#007acc", title:"BLUEPRINT.md — alt-tab — Visual Studio Code", app:"Code", bundle:"com.microsoft.VSCode",    id:67305, pid:11804, flags:[]},
+  {icon:"⚙",  bg:"#8e8e93", title:"Settings — Displays",                app:"System Settings", bundle:"com.apple.systempreferences", id:22118, pid:2884, flags:[]},
+  {icon:"P",  bg:"#2f6fed", title:"variant-a.png — Preview",            app:"Preview",       bundle:"com.apple.Preview",         id:90561, pid:12267, flags:["minimized"]},
+];
+
+const ATTRS = [
+  {key:"title",  label:"Title",     placeholder:"Window title",               numeric:false},
+  {key:"id",     label:"Window ID", placeholder:"e.g. 74821",                 numeric:true},
+  {key:"app",    label:"App name",  placeholder:"e.g. Slack",                 numeric:false},
+  {key:"bundle", label:"Bundle ID", placeholder:"e.g. com.mitchellh.ghostty", numeric:false},
+  {key:"pid",    label:"PID",       placeholder:"e.g. 4421",                  numeric:true},
+];
+const attrDef = k => ATTRS.find(a => a.key === k);
+
+/* ================= matching ================= */
+const kindList = a => a.numeric ? KINDS_NUM : KINDS_TEXT;
+
+function rowMatches(r, w){
+  const a = attrDef(r.attr);
+  const v = w[r.attr];
+  if (r.pattern.trim() === "") return false;
+  if (a.numeric){
+    const n = Number(r.pattern);
+    if (Number.isNaN(n)) return false;
+    return r.kind === "Is" ? v === n : v !== n;
+  }
+  const t = String(v);
+  switch (r.kind){
+    case "Contains": return t.toLowerCase().includes(r.pattern.toLowerCase());
+    case "Exact": return t === r.pattern;
+    case "Starts with": return t.startsWith(r.pattern);
+    case "Ends with": return t.endsWith(r.pattern);
+    case "Regex": try { return new RegExp(r.pattern).test(t); } catch (_) { return false; }
+  }
+  return false;
+}
+function rowError(r){
+  if (r.pattern.trim() === "") return null;
+  const a = attrDef(r.attr);
+  if (a.numeric && Number.isNaN(Number(r.pattern))) return "Enter a number, e.g. " + (r.attr === "id" ? "74821" : "4421");
+  if (!a.numeric && r.kind === "Regex"){ try { new RegExp(r.pattern); } catch (_) { return "Invalid regular expression"; } }
+  return null;
+}
+
+/* ================= markup helpers ================= */
+const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+const CHEV = '<span class="chev"></span>';
+const DROPPER = '<svg width="11" height="11" viewBox="0 0 16 16"><path d="M10.8 1.9l3.3 3.3-1.3 1.3-.7-.7-5 5c-.2.2-.5.3-.8.3H4.1L2.6 12.6l-1.2-1.2 1.5-1.5V7.7c0-.3.1-.6.3-.8l5-5-.7-.7 1.3-1.3z" fill="#6e6e73"/></svg>';
+const NONEDOT = '<svg width="13" height="13" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.8" fill="none" stroke="#a5a5aa" stroke-width="1.4"/><line x1="3" y1="11" x2="11" y2="3" stroke="#a5a5aa" stroke-width="1.4"/></svg>';
+
+const mrowHTML = (r, i) =>
+  '<div class="mrowwrap">' +
+    '<div class="mrow" data-i="' + i + '">' +
+      '<div class="popup attr-popup"><span class="plabel">' + attrDef(r.attr).label + '</span>' + CHEV + '</div>' +
+      '<div class="popup kind-popup"><span class="plabel">' + r.kind + '</span>' + CHEV + '</div>' +
+      '<input class="tfield pattern" value="' + esc(r.pattern) + '" spellcheck="false">' +
+      '<button class="sqbtn minus" title="Remove matcher">−</button>' +
+    '</div>' +
+    '<div class="rowerr" hidden></div>' +
+  '</div>';
+
+const matchersEditorHTML = extra =>
+  '<div class="mled" data-ann>' +
+    '<div class="mlhead"><span>Match</span>' +
+      '<div class="popup any-popup"><span class="plabel">any</span>' + CHEV + '</div>' +
+      '<span>of the following:</span>' + (extra || "") + '</div>' +
+    '<div class="mlbox">' +
+      '<div class="mlrows"></div>' +
+      '<div class="mlfoot"><button class="btn add-matcher">+ Add matcher</button></div>' +
+    '</div>' +
+  '</div>';
+
+const hintLineHTML = withDiscl =>
+  '<div class="hintline"><span class="count-line"></span>' +
+  (withDiscl ? '<button class="discl open" data-ann><span class="tri"></span>More details</button>' : "") +
+  '</div>';
+
+/* A — value chips */
+function chipsRowHTML(w){
+  const flags = (w.flags || []).map(f => '<span class="wattr dim" title="Shown for context — not matchable yet">' + f + '</span>').join("");
+  return '<div class="wrow" data-wid="' + w.id + '">' +
+    '<span class="wicon" style="background:' + w.bg + '">' + esc(w.icon) + '</span>' +
+    '<div class="wcol"><div class="wchips">' +
+      '<span class="wattr primary" data-attr="title" data-val="' + esc(w.title) + '">' + esc(w.title) + '</span>' +
+      '<span class="wattr" data-attr="id" data-val="' + w.id + '">id ' + w.id + '</span>' +
+      '<span class="wattr" data-attr="app" data-val="' + esc(w.app) + '">' + esc(w.app) + '</span>' +
+      '<span class="wattr mono" data-attr="bundle" data-val="' + esc(w.bundle) + '">' + esc(w.bundle) + '</span>' +
+      '<span class="wattr" data-attr="pid" data-val="' + w.pid + '">pid ' + w.pid + '</span>' +
+      flags +
+    '</div></div>' +
+    '<span class="whit" title="Matches the current rule">✓</span>' +
+  '</div>';
+}
+
+/* B — linked values */
+function linkRowHTML(w){
+  const flags = (w.flags || []).map(f => " · " + f).join("");
+  return '<div class="wrow" data-wid="' + w.id + '">' +
+    '<span class="wicon" style="background:' + w.bg + '">' + esc(w.icon) + '</span>' +
+    '<div class="wcol">' +
+      '<div class="wtitle2 wlink" data-attr="title" data-val="' + esc(w.title) + '">' + esc(w.title) + '</div>' +
+      '<div class="wmeta"><span class="wlink" data-attr="app" data-val="' + esc(w.app) + '">' + esc(w.app) + '</span> · ' +
+        '<span class="wlink mono" data-attr="bundle" data-val="' + esc(w.bundle) + '">' + esc(w.bundle) + '</span></div>' +
+      '<div class="wmeta"><span class="wlink" data-attr="id" data-val="' + w.id + '">id ' + w.id + '</span> · ' +
+        '<span class="wlink" data-attr="pid" data-val="' + w.pid + '">pid ' + w.pid + '</span>' + flags + '</div>' +
+    '</div>' +
+    '<span class="whit" title="Matches the current rule">✓</span>' +
+  '</div>';
+}
+
+/* C — table row */
+function tableRowHTML(w, marquee){
+  const flags = (w.flags || []).length ? " · " + w.flags.join(", ") : "";
+  const title = marquee ? '<span class="mq">' + esc(w.title) + '</span>' : esc(w.title);
+  return '<div class="dtrow" data-wid="' + w.id + '">' +
+    '<div class="dcell click" data-attr="title" data-val="' + esc(w.title) + '">' +
+      '<div class="dtitle">' + title + '</div>' +
+      '<div class="dsub"><span class="dlink" data-attr="bundle" data-val="' + esc(w.bundle) + '">' + esc(w.bundle) + '</span>' + flags + '</div>' +
+    '</div>' +
+    '<div class="dcell num click" data-attr="id" data-val="' + w.id + '">' + w.id + '</div>' +
+    '<div class="dcell click" data-attr="app" data-val="' + esc(w.app) + '">' + esc(w.app) + '</div>' +
+    '<div class="dcell num click" data-attr="pid" data-val="' + w.pid + '">' + w.pid + '</div>' +
+  '</div>';
+}
+
+const debugBoxHTML = () =>
+  '<div class="debugbox" data-ann>' +
+    '<div class="dbhead">OPEN WINDOWS — click a value to use it in the rule</div>' +
+    WINDOWS.map(chipsRowHTML).join("") +
+  '</div>';
+
+const dGridHTML = () =>
+  '<div class="debugbox dgrid" data-ann>' +
+    '<div class="dcap"><span class="cd">OPEN WINDOWS</span><span class="cn">click a value to use it in the rule</span></div>' +
+    '<div class="dthead"><div>TITLE</div><div>ID</div><div>APP</div><div>PID</div></div>' +
+    '<div class="dbody">' + WINDOWS.map(w => tableRowHTML(w, true)).join("") + '</div>' +
+  '</div>';
+
+const popCardHTML = () =>
+  '<div class="popcard" data-ann>' +
+    '<div class="pcbar"><span class="pcname">OPEN WINDOWS</span><span class="pchint">click a value to match it</span><span class="pcclose" title="Close">✕</span></div>' +
+    '<div class="pcbody">' + WINDOWS.map(linkRowHTML).join("") + '</div>' +
+  '</div>';
+
+const drawerHTML = () =>
+  '<div class="drawer open" data-ann>' +
+    '<div class="drawerbar">' +
+      '<span class="tri"></span><span class="dbname">MORE DETAILS</span>' +
+      '<span class="dbhint">' + WINDOWS.length + ' open windows — click any value to use it in the rule</span>' +
+    '</div>' +
+    '<div class="dtable">' +
+      '<div class="dthead"><div>TITLE</div><div>ID</div><div>APP</div><div>PID</div></div>' +
+      WINDOWS.map(w => tableRowHTML(w)).join("") +
+    '</div>' +
+  '</div>';
+
+/* ================= form assembly ================= */
+const PART_TOP =
+  '<div class="fhead"><div class="licon ficon">>_</div><div><div class="fname">Ghostty</div><div class="fbundle">com.mitchellh.ghostty</div></div></div>' +
+  '<div class="seclabel">APPLIES TO</div>' +
+  '<div class="seg" data-ann><div class="seg-item">This window</div><div class="seg-item sel">Match</div><div class="seg-item">All windows</div></div>';
+
+const PART_OPTS =
+  '<div class="seclabel">ALIAS</div>' +
+  '<div class="arow"><input class="tfield alias" value="Term" spellcheck="false"><span class="letterchip">T</span></div>' +
+  '<div class="seclabel">COLOR</div>' +
+  '<div class="dots">' +
+    '<span class="dot wheel" title="Pick any color"></span>' +
+    '<span class="dot eyedrop" title="Pick a color off the screen">' + DROPPER + '</span>' +
+    '<span class="dot" title="No color">' + NONEDOT + '</span>' +
+    '<span class="dot" style="background:#ff3b30"></span>' +
+    '<span class="dot" style="background:#ff9500"></span>' +
+    '<span class="dot" style="background:#ffd60a"></span>' +
+    '<span class="dot" style="background:#34c759"></span>' +
+    '<span class="dot seldot" style="background:#0a6cff"></span>' +
+    '<span class="dot" style="background:#bf5af2"></span>' +
+    '<span class="dot" style="background:#ff375f"></span>' +
+  '</div>' +
+  '<div class="seclabel">VISIBILITY</div>' +
+  '<div class="vis"><span class="switch"><span class="knob"></span></span><span>Hide from the switcher</span></div>' +
+  '<button class="btn remove-rule">Remove customization</button>';
+
+const PART_PREVIEW =
+  '<div class="pvcap">PREVIEW — HOW IT LOOKS IN THE SWITCHER</div>' +
+  '<div class="pvpanel"><div class="licon">>_</div><div class="pvtext"><div class="pvname">Term</div><div class="pvsub">no match right now</div></div><span class="pvdot"></span></div>';
+
+function variantHTML(key){
+  if (key === "a")
+    return PART_TOP + '<div class="rowwrap">' + matchersEditorHTML("") + '</div>' + hintLineHTML(true) + debugBoxHTML() + PART_OPTS + PART_PREVIEW;
+  if (key === "b")
+    return PART_TOP + '<div class="rowwrap">' + matchersEditorHTML('<button class="btn debugbtn on" data-ann><span class="tri"></span>Debug</button>') + popCardHTML() + '</div>' + hintLineHTML(false) + PART_OPTS + PART_PREVIEW;
+  if (key === "d")
+    return PART_TOP + '<div class="rowwrap">' + matchersEditorHTML("") + '</div>' + hintLineHTML(true) + dGridHTML() + PART_OPTS + PART_PREVIEW;
+  return PART_TOP + '<div class="rowwrap">' + matchersEditorHTML("") + '</div>' + hintLineHTML(false) + PART_OPTS + drawerHTML() + PART_PREVIEW;
+}
+
+/* ================= menus ================= */
+let openMenuEl = null;
+function closeMenu(){
+  if (openMenuEl){ openMenuEl.remove(); openMenuEl = null; }
+  document.querySelectorAll(".popup.open").forEach(p => p.classList.remove("open"));
+}
+function openMenu(anchor, items, selected, cb){
+  closeMenu();
+  const m = document.createElement("div");
+  m.className = "menu";
+  items.forEach(it => {
+    const d = document.createElement("div");
+    d.className = "mitem" + (it === selected ? " sel" : "");
+    d.textContent = it;
+    d.addEventListener("mousedown", ev => { ev.preventDefault(); closeMenu(); cb(it); });
+    m.appendChild(d);
+  });
+  anchor.appendChild(m);
+  anchor.classList.add("open");
+  const win = anchor.closest(".window");
+  if (win){
+    const mr = m.getBoundingClientRect(), wr = win.getBoundingClientRect();
+    if (mr.right > wr.right - 8){ m.style.left = "auto"; m.style.right = "0"; }
+  }
+  openMenuEl = m;
+}
+document.addEventListener("mousedown", e => {
+  if (!e.target.closest(".menu") && !e.target.closest(".popup")) closeMenu();
+});
+
+/* ================= per-variant wiring ================= */
+function initVariant(v){
+  const st = { matchAll:false, focus:0, rows:[{ attr:"title", kind:"Contains", pattern:"README" }] };
+  const host = v.querySelector(".mlrows");
+  const cnt = v.querySelector(".count-line");
+  const pvsub = v.querySelector(".pvsub");
+  const segItems = [...v.querySelectorAll(".seg-item")];
+  const rowEls = () => [...v.querySelectorAll(".mlrows .mrow")];
+
+  function applyRow(r, i, el){
+    const a = attrDef(r.attr);
+    const list = kindList(a);
+    if (!list.includes(r.kind)) r.kind = list[0];
+    el.querySelector(".attr-popup .plabel").textContent = a.label;
+    el.querySelector(".kind-popup .plabel").textContent = r.kind;
+    const inp = el.querySelector(".pattern");
+    inp.value = r.pattern;
+    inp.placeholder = r.kind === "Regex" ? "Regular expression" : a.placeholder;
+    inp.classList.toggle("mono", r.kind === "Regex" || a.numeric);
+    const err = rowError(r);
+    inp.classList.toggle("invalid", !!err);
+    const errEl = el.closest(".mrowwrap").querySelector(".rowerr");
+    errEl.hidden = !err;
+    errEl.textContent = err || "";
+    el.classList.toggle("focus", i === st.focus);
+  }
+
+  function renderRows(){
+    host.innerHTML = st.rows.map(mrowHTML).join("");
+    rowEls().forEach((el, i) => applyRow(st.rows[i], i, el));
+    refresh();
+  }
+
+  function toggleDebug(){
+    if (v.dataset.variant === "b"){
+      const card = v.querySelector(".popcard");
+      card.toggleAttribute("hidden");
+      v.querySelector(".debugbtn").classList.toggle("on", !card.hasAttribute("hidden"));
+      return;
+    }
+    if (v.dataset.variant === "c"){
+      v.querySelector(".drawer").classList.toggle("open");
+      return;
+    }
+    const box = v.querySelector(".debugbox");
+    box.toggleAttribute("hidden");
+    const d = v.querySelector(".discl");
+    if (d) d.classList.toggle("open", !box.hasAttribute("hidden"));
+  }
+
+  function setFromValue(attr, val){
+    const kind = attrDef(attr).numeric ? "Is" : "Contains";
+    if (!st.rows.length){
+      st.rows.push({ attr, kind, pattern: String(val) });
+      st.focus = 0;
+    } else {
+      st.focus = Math.max(0, Math.min(st.focus, st.rows.length - 1));
+      Object.assign(st.rows[st.focus], { attr, kind, pattern: String(val) });
+    }
+    renderRows();
+    const el = rowEls()[st.focus];
+    el.classList.add("flash");
+    setTimeout(() => el.classList.remove("flash"), 700);
+  }
+
+  function refresh(){
+    const segIdx = segItems.findIndex(s => s.classList.contains("sel"));
+    const active = segIdx === 1;
+    const usable = st.rows.filter(r => r.pattern.trim() !== "" && !rowError(r));
+    const hits = (active && usable.length)
+      ? WINDOWS.filter(w => st.matchAll ? usable.every(r => rowMatches(r, w)) : usable.some(r => rowMatches(r, w)))
+      : [];
+
+    if (!active){
+      cnt.textContent = segIdx === 0 ? "Applies to “README.md — alt-tab”" : "All open windows are affected";
+    } else {
+      cnt.textContent = hits.length
+        ? "✓ Matches " + hits.length + " of " + WINDOWS.length + " open windows now"
+        : "No open windows match right now";
+    }
+    pvsub.textContent = active && hits.length ? hits[0].title : "no match right now";
+
+    v.querySelectorAll("[data-attr]").forEach(el => {
+      const used = active && usable.some(r => el.dataset.attr === r.attr && String(el.dataset.val) === r.pattern);
+      el.classList.toggle("used", used);
+    });
+
+    const hitIds = new Set(hits.map(w => String(w.id)));
+    v.querySelectorAll("[data-wid]").forEach(r => {
+      r.classList.toggle("hit", active && hitIds.has(r.dataset.wid));
+    });
+
+    [".mled", ".hintline", ".debugbox", ".popcard", ".drawer"].forEach(sel => {
+      const el = v.querySelector(sel);
+      if (!el) return;
+      el.style.opacity = active ? "" : ".45";
+      el.style.pointerEvents = active ? "" : "none";
+    });
+  }
+
+  v.addEventListener("click", e => {
+    const mw = e.target.closest(".mrowwrap");
+    const i = mw ? Number(mw.querySelector(".mrow").dataset.i) : -1;
+
+    if (e.target.closest(".add-matcher")){
+      st.rows.push({ attr:"title", kind:"Contains", pattern:"" });
+      st.focus = st.rows.length - 1;
+      renderRows();
+      const inp = rowEls()[st.focus] && rowEls()[st.focus].querySelector(".pattern");
+      if (inp) inp.focus();
+      return;
+    }
+    if (e.target.closest(".minus")){
+      if (i < 0) return;
+      st.rows.splice(i, 1);
+      st.focus = Math.max(0, Math.min(st.focus, st.rows.length - 1));
+      renderRows();
+      return;
+    }
+    if (e.target.closest(".attr-popup")){
+      const ap = e.target.closest(".attr-popup");
+      openMenu(ap, ATTRS.map(a => a.label), attrDef(st.rows[i].attr).label, label => {
+        const r = st.rows[i];
+        r.attr = ATTRS.find(a => a.label === label).key;
+        applyRow(r, i, mw.querySelector(".mrow"));
+        refresh();
+      });
+      return;
+    }
+    if (e.target.closest(".kind-popup")){
+      const r = st.rows[i];
+      openMenu(e.target.closest(".kind-popup"), kindList(attrDef(r.attr)), r.kind, k => {
+        r.kind = k;
+        applyRow(r, i, mw.querySelector(".mrow"));
+        refresh();
+      });
+      return;
+    }
+    if (e.target.closest(".any-popup")){
+      const ap = e.target.closest(".any-popup");
+      openMenu(ap, ["any", "all"], st.matchAll ? "all" : "any", word => {
+        st.matchAll = word === "all";
+        ap.querySelector(".plabel").textContent = word;
+        refresh();
+      });
+      return;
+    }
+    if (mw && !e.target.closest("input") && st.focus !== i){
+      st.focus = i;
+      rowEls().forEach((el, j) => el.classList.toggle("focus", j === st.focus));
+    }
+    const seg = e.target.closest(".seg-item");
+    if (seg){
+      segItems.forEach(s => s.classList.remove("sel"));
+      seg.classList.add("sel");
+      refresh();
+      return;
+    }
+    const pick = e.target.closest("[data-attr][data-val]");
+    if (pick && v.querySelector(".debugbox, .popcard, .drawer").contains(pick)){
+      setFromValue(pick.dataset.attr, pick.dataset.val);
+      return;
+    }
+    if (e.target.closest(".discl") || e.target.closest(".debugbtn") || e.target.closest(".drawerbar") || e.target.closest(".pcclose")){
+      toggleDebug();
+    }
+  });
+
+  v.addEventListener("input", e => {
+    if (!e.target.classList.contains("pattern")) return;
+    const mw = e.target.closest(".mrowwrap");
+    if (!mw) return;
+    const r = st.rows[Number(mw.querySelector(".mrow").dataset.i)];
+    r.pattern = e.target.value;
+    const err = rowError(r);
+    e.target.classList.toggle("invalid", !!err);
+    const errEl = mw.querySelector(".rowerr");
+    errEl.hidden = !err;
+    errEl.textContent = err || "";
+    refresh();
+  });
+
+  if (v.dataset.variant === "d") wireGridHover(v);
+
+  renderRows();
+}
+
+let tipEl = null;
+function ensureTip(){
+  if (!tipEl){
+    tipEl = document.createElement("div");
+    tipEl.className = "tip";
+    document.body.appendChild(tipEl);
+  }
+  return tipEl;
+}
+function wireGridHover(v){
+  v.querySelectorAll(".dcell[data-attr='title']").forEach(cell => {
+    cell.addEventListener("mouseenter", e => {
+      const m = cell.querySelector(".mq");
+      if (!m || !m.classList.contains("on")) return;
+      const t = ensureTip();
+      t.textContent = cell.dataset.val;
+      t.classList.add("on");
+      const r = t.getBoundingClientRect();
+      let x = e.clientX + 14, y = e.clientY + 18;
+      if (x + r.width > window.innerWidth - 8) x = window.innerWidth - 8 - r.width;
+      if (y + r.height > window.innerHeight - 8) y = e.clientY - r.height - 12;
+      t.style.left = x + "px";
+      t.style.top = y + "px";
+    });
+    cell.addEventListener("mouseleave", () => { if (tipEl) tipEl.classList.remove("on"); });
+  });
+}
+function measureMarquees(v){
+  v.querySelectorAll(".dbody .dtitle").forEach(t => {
+    const m = t.querySelector(".mq");
+    if (!m) return;
+    const dist = m.scrollWidth - t.clientWidth;
+    if (dist > 4){
+      m.style.setProperty("--mq-dist", "-" + dist + "px");
+      m.style.setProperty("--mq-dur", Math.min(9, Math.max(3, dist / 12)).toFixed(1) + "s");
+      m.classList.add("on");
+      t.classList.add("mqclip");
+    }
+  });
+}
+const SIDEBAR =
+  '<div class="sidebar">' +
+    '<div class="lrow"><div class="licon">it</div><div class="ltext"><div class="lname">iTerm</div><div class="lsub">alt-tab</div></div></div>' +
+    '<div class="lrow"><div class="licon" style="background:#4a154b">S</div><div class="ltext"><div class="lname">Slack</div><div class="lsub">(Dev)</div></div></div>' +
+    '<div class="lrow sel"><div class="licon">>_</div><div class="ltext"><div class="lname">Ghostty</div><div class="lsub">README.md — alt-tab</div></div></div>' +
+  '</div>';
+
+function windowHTML(key){
+  return '<div class="window">' +
+    '<div class="titlebar"><div class="lights"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div><div class="wtitle">Windows</div></div>' +
+    '<div class="content">' + SIDEBAR + '<div class="detail">' + variantHTML(key) + '</div></div>' +
+  '</div>';
+}
+
+/* ================= assemble + wire ================= */
+document.querySelectorAll(".variant").forEach(v => { v.innerHTML = windowHTML(v.dataset.variant); });
+document.querySelectorAll(".variant").forEach(v => initVariant(v));
+
+function showVariant(id){
+  document.querySelectorAll(".variant").forEach(x => x.classList.toggle("active", x.dataset.variant === id));
+  document.querySelectorAll(".variant-tab").forEach(t => t.classList.toggle("active", t.dataset.v === id));
+  try { history.replaceState(null, "", "#" + id); } catch (_) { location.hash = id; }
+  if (id === "d"){
+    const dv = document.querySelector('.variant[data-variant="d"]');
+    if (dv) requestAnimationFrame(() => measureMarquees(dv));
+  }
+}
+document.querySelectorAll(".variant-tab").forEach(t => t.addEventListener("click", () => showVariant(t.dataset.v)));
+window.addEventListener("hashchange", () => {
+  const id = location.hash.slice(1);
+  if (["a", "b", "c", "d"].includes(id)) showVariant(id);
+});
+const startVariant = new URLSearchParams(location.search).get("v") || location.hash.slice(1) || "d";
+showVariant(["a", "b", "c", "d"].includes(startVariant) ? startVariant : "d");
+
+/* ---- sketch toolbar ---- */
+document.querySelectorAll("#sketch-tools [data-zoom]").forEach(b => b.addEventListener("click", () => {
+  document.querySelector(".stage").style.transform = "scale(" + b.dataset.zoom + ")";
+  document.querySelectorAll("#sketch-tools [data-zoom]").forEach(x => x.classList.toggle("on", x === b));
+}));
+document.getElementById("ann-toggle").addEventListener("click", e => {
+  document.body.classList.toggle("annotate");
+  e.target.classList.toggle("on");
+});
+</script>
+</body>
+</html>
