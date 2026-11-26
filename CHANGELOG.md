@@ -58,6 +58,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against the last successful nightly and skips changelog-, docs- and
   planning-only commits. Manual dispatch, a first-ever nightly, and force
   pushes still build; stable releases were already gated on `VERSION` bumps.
+- The window-rules list is wider (188 → 216 pt), so rule names and their
+  summaries truncate less.
 
 ## [0.2.2] - 2026-11-26
 
