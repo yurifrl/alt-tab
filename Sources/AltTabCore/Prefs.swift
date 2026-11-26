@@ -33,7 +33,7 @@ enum PrefsStore {
         static let searchMismatch = "at.search.allowMismatch"
         static let workspaceExcludes = "at.workspaces.appExcludes"   // [String] bundle ids
         static let workspaceTitleExcludes = "at.workspaces.titleExcludes" // [String] "bundle|pattern"
-        static let windowRules = "at.rules.windowRules"   // [[String: Any]] bundleId/pattern/hide/alias
+        static let windowRules = "at.rules.windowRules"   // [[String: Any]] bundleId/matchers/matchAll/hide/alias
         static let showWindowlessApps = "at.rules.showWindowlessApps"    // Bool
         static let panelDisplay = "at.panel.showOn"
         static let activeDisplayOnly = "at.panel.activeDisplayOnly"
@@ -259,7 +259,7 @@ enum PrefsStore {
             if list[i].hide && list[i].alias.isEmpty && list[i].color.isEmpty { list.remove(at: i) } else { list[i].hide.toggle() }
         } else {
             var r = pinnedRule(for: w, hide: true)
-            if w.windowId == 0 { r.pattern = "=\(w.title)"; r.windowTitle = "" }
+            if w.windowId == 0 { r.matchers = [Matcher(kind: .exact, text: w.title)]; r.windowTitle = "" }
             list.append(r)
         }
         windowRules = list
@@ -315,17 +315,160 @@ enum PrefsStore {
         set { d.set(newValue, forKey: Key.groupCount) }
     }
 
-    /// One Rules-pane row: matches an app (bundle id) and optionally a window
-    /// title pattern (empty = every window of the app), then applies any of:
-    /// hide the window, show it under an alias.
+    /// One condition of a rule: what it looks at (`attribute`), how it compares
+    /// (`kind`), and the typed value. Title/Contains stays the default: entries
+    /// persisted before attributes existed read back as title conditions.
+    struct Matcher: Equatable {
+        /// What a condition looks at. The open-windows table drops clicked
+        /// values into a row under this attribute.
+        enum Attribute: String, CaseIterable {
+            case title, windowId, app, bundle, pid
+
+            var title: String {
+                switch self {
+                case .title: return "Title"
+                case .windowId: return "Window ID"
+                case .app: return "App name"
+                case .bundle: return "Bundle ID"
+                case .pid: return "PID"
+                }
+            }
+            /// Short form for the rules-list summary ("id “74821”").
+            var short: String {
+                switch self {
+                case .title: return "title"
+                case .windowId: return "id"
+                case .app: return "app"
+                case .bundle: return "bundle"
+                case .pid: return "pid"
+                }
+            }
+            /// Numbers compare with "is"/"is not"; text with the string kinds.
+            var numeric: Bool { self == .windowId || self == .pid }
+
+            /// The field's placeholder while this attribute is selected.
+            var placeholder: String {
+                switch self {
+                case .title: return "Window title"
+                case .windowId: return "e.g. 74821"
+                case .app: return "e.g. Slack"
+                case .bundle: return "e.g. com.mitchellh.ghostty"
+                case .pid: return "e.g. 1183"
+                }
+            }
+
+            /// The window's value for this attribute ("" = nothing to compare).
+            func value(of w: WindowModel) -> String {
+                switch self {
+                case .title: return w.title
+                case .windowId: return w.windowId == 0 ? "" : String(w.windowId)
+                case .app: return w.appLocalName
+                case .bundle: return w.bundleId
+                case .pid: return String(w.pid)
+                }
+            }
+        }
+
+        enum Kind: String, CaseIterable {
+            case contains, exact, startsWith, endsWith, regex
+            case isExactly = "is"
+            case isNot = "isNot"
+
+            var title: String {
+                switch self {
+                case .contains: return "Contains"
+                case .exact: return "Exact"
+                case .startsWith: return "Starts with"
+                case .endsWith: return "Ends with"
+                case .regex: return "Regex"
+                case .isExactly: return "Is"
+                case .isNot: return "Is not"
+                }
+            }
+            var numeric: Bool { self == .isExactly || self == .isNot }
+
+            /// The kinds an attribute's row offers.
+            static func list(for attribute: Attribute) -> [Kind] {
+                attribute.numeric ? [.isExactly, .isNot]
+                                  : [.contains, .exact, .startsWith, .endsWith, .regex]
+            }
+        }
+
+        var attribute: Attribute = .title
+        var kind: Kind = .contains
+        var text: String = ""
+
+        /// Empty text matches nothing: a half-typed condition must never
+        /// sweep in every window.
+        func matches(_ w: WindowModel) -> Bool {
+            guard !text.isEmpty else { return false }
+            switch attribute {
+            case .title, .app, .bundle:
+                return Self.compare(kind, text, attribute.value(of: w))
+            case .windowId, .pid:
+                // A string kind left on a numeric attribute matches nothing;
+                // the editor rewrites it the moment it sees it.
+                guard kind.numeric, let n = Int64(text),
+                      let v = Int64(attribute.value(of: w)) else { return false }
+                return kind == .isNot ? v != n : v == n
+            }
+        }
+
+        private static func compare(_ kind: Kind, _ text: String, _ value: String) -> Bool {
+            switch kind {
+            case .contains: return value.localizedCaseInsensitiveContains(text)
+            case .exact: return value == text
+            case .startsWith: return value.hasPrefix(text)
+            case .endsWith: return value.hasSuffix(text)
+            case .regex:
+                guard let re = regex(text) else { return false }
+                return re.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)) != nil
+            case .isExactly, .isNot: return false
+            }
+        }
+
+        /// The editor's live check behind the field's red flag.
+        static func isValidRegex(_ pattern: String) -> Bool { regex(pattern) != nil }
+
+        // Compile-once caches, valid and invalid apart: typing, and every
+        // tracker refresh, must not recompile the same string.
+        private static var regexOK: [String: NSRegularExpression] = [:]
+        private static var regexBad: Set<String> = []
+        /// Hit from the main thread (editor typing, the rules pane) and from
+        /// the tracker's sweep queue (rule matching), so every access is
+        /// serialized.
+        private static let regexLock = NSLock()
+        private static func regex(_ pattern: String) -> NSRegularExpression? {
+            regexLock.lock()
+            defer { regexLock.unlock() }
+            if let ok = regexOK[pattern] { return ok }
+            if regexBad.contains(pattern) { return nil }
+            guard let re = try? NSRegularExpression(pattern: pattern) else {
+                if regexBad.count > 64 { regexBad.removeAll() }
+                regexBad.insert(pattern)
+                return nil
+            }
+            if regexOK.count > 64 { regexOK.removeAll() }
+            regexOK[pattern] = re
+            return re
+        }
+    }
+
+    /// One Rules-pane row: matches an app (bundle id) and optionally its
+    /// window titles (no condition = every window of the app), then applies
+    /// any of: hide the window, show it under an alias. An empty bundle id is
+    /// the generic row: every app, narrowed only by its title conditions.
     struct WindowRule: Equatable {
         var bundleId: String
-        var pattern: String
+        /// Title conditions: all must match, or (with `matchAll` off) any one.
+        var matchers: [Matcher] = []
+        /// false = "any" (OR), true = "all" (AND).
+        var matchAll: Bool = false
         var hide: Bool
         var alias: String
         /// "#RRGGBB" color tag, "" = none.
         var color: String = ""
-        /// CGWindowID this rule is pinned to (0 = not pinned; `pattern` is used).
+        /// CGWindowID this rule is pinned to (0 = not pinned; `matchers` are used).
         /// Survives title/tab changes; lost when the window closes — re-link it
         /// from Preferences ("Pick from open windows").
         var windowId: UInt32 = 0
@@ -340,7 +483,9 @@ enum PrefsStore {
             if let raw = d.array(forKey: Key.windowRules) as? [[String: Any]] {
                 return raw.map {
                     WindowRule(bundleId: $0["bundleId"] as? String ?? "",
-                               pattern: $0["pattern"] as? String ?? "",
+                               matchers: ($0["matchers"] as? [[String: Any]])?.map(matcher)
+                                   ?? legacyMatchers($0["pattern"] as? String ?? ""),
+                               matchAll: $0["matchAll"] as? Bool ?? false,
                                hide: $0["hide"] as? Bool ?? false,
                                alias: $0["alias"] as? String ?? "",
                                color: $0["color"] as? String ?? "",
@@ -350,12 +495,12 @@ enum PrefsStore {
             }
             var migrated: [WindowRule] = []
             for e in d.stringArray(forKey: Key.workspaceExcludes) ?? [] where !e.isEmpty {
-                migrated.append(WindowRule(bundleId: e, pattern: "", hide: true, alias: ""))
+                migrated.append(WindowRule(bundleId: e, hide: true, alias: ""))
             }
             for e in d.stringArray(forKey: Key.workspaceTitleExcludes) ?? [] {
                 guard let sep = e.firstIndex(of: "|") else { continue }
                 migrated.append(WindowRule(bundleId: String(e[..<sep]),
-                                           pattern: String(e[e.index(after: sep)...]),
+                                           matchers: legacyMatchers(String(e[e.index(after: sep)...])),
                                            hide: true, alias: ""))
             }
             d.set(migrated.map(dict), forKey: Key.windowRules)
@@ -374,20 +519,43 @@ enum PrefsStore {
     static let windowRulesChanged = Notification.Name("at.windowRulesChanged")
 
     private static func dict(_ r: WindowRule) -> [String: Any] {
-        ["bundleId": r.bundleId, "pattern": r.pattern, "hide": r.hide, "alias": r.alias, "color": r.color,
+        ["bundleId": r.bundleId,
+         "matchers": r.matchers.map { ["attribute": $0.attribute.rawValue,
+                                        "kind": $0.kind.rawValue, "text": $0.text] },
+         "matchAll": r.matchAll,
+         "hide": r.hide, "alias": r.alias, "color": r.color,
          "windowId": Int(r.windowId), "windowTitle": r.windowTitle]
     }
 
-    /// Rule match. A pinned rule matches only its window id (and app). Title
-    /// patterns use the subset below. A pattern-less rule whose app id is not
-    /// a bundle id (no ".") keeps the legacy loose matching on the app's name.
+    private static func matcher(_ raw: [String: Any]) -> Matcher {
+        Matcher(attribute: Matcher.Attribute(rawValue: raw["attribute"] as? String ?? "") ?? .title,
+                kind: Matcher.Kind(rawValue: raw["kind"] as? String ?? "") ?? .contains,
+                text: raw["text"] as? String ?? "")
+    }
+
+    /// Entries stored before matchers carried one `pattern` string: "=x"
+    /// exact, "^x" prefix, "x$" suffix, else contains. Read as one condition;
+    /// the next write persists the new shape.
+    private static func legacyMatchers(_ pattern: String) -> [Matcher] {
+        if pattern.hasPrefix("=") { return [Matcher(kind: .exact, text: String(pattern.dropFirst()))] }
+        if pattern.hasPrefix("^") { return [Matcher(kind: .startsWith, text: String(pattern.dropFirst()))] }
+        if pattern.hasSuffix("$") { return [Matcher(kind: .endsWith, text: String(pattern.dropLast()))] }
+        return pattern.isEmpty ? [] : [Matcher(kind: .contains, text: pattern)]
+    }
+
+    /// Rule match. A pinned rule matches only its window id (and app). An
+    /// empty app id makes the rule generic: it matches windows of any app,
+    /// narrowed by its title conditions. A condition-less rule whose app id is
+    /// not a bundle id (no ".") keeps the legacy loose matching on the app's name.
     private static func matches(_ r: WindowRule, _ w: WindowModel) -> Bool {
         if r.windowId != 0 { return w.windowId == r.windowId && r.bundleId == w.bundleId }
-        let appMatches = r.bundleId == w.bundleId
-            || (r.pattern.isEmpty && !r.bundleId.contains(".") && !r.bundleId.isEmpty
+        let appMatches = r.bundleId.isEmpty || r.bundleId == w.bundleId
+            || (r.matchers.isEmpty && !r.bundleId.contains(".") && !r.bundleId.isEmpty
                 && w.appLocalName.localizedCaseInsensitiveContains(r.bundleId))
         guard appMatches else { return false }
-        return r.pattern.isEmpty || titleMatches(w.title, r.pattern)
+        guard !r.matchers.isEmpty else { return true }
+        return r.matchAll ? r.matchers.allSatisfy { $0.matches(w) }
+                          : r.matchers.contains { $0.matches(w) }
     }
 
     /// Rule match for a tracked window.
@@ -399,17 +567,20 @@ enum PrefsStore {
     }
 
     /// Best rule among those matching and having a value: pinned > title
-    /// pattern > app-wide.
+    /// conditions > app-wide > generic (every app).
     private static func best(_ w: WindowModel, _ has: (WindowRule) -> Bool) -> WindowRule? {
         let hits = windowRules.filter { has($0) && matches($0, w) }
-        return hits.first { $0.windowId != 0 } ?? hits.first { !$0.pattern.isEmpty } ?? hits.first
+        return hits.first { $0.windowId != 0 }
+            ?? hits.first { !$0.matchers.isEmpty }
+            ?? hits.first { !$0.bundleId.isEmpty }
+            ?? hits.first
     }
 
     static func alias(for w: WindowModel) -> String? { best(w) { !$0.alias.isEmpty }?.alias }
     static func color(for w: WindowModel) -> String? { best(w) { !$0.color.isEmpty }?.color }
 
     private static func pinnedRule(for w: WindowModel, hide: Bool = false) -> WindowRule {
-        WindowRule(bundleId: w.bundleId, pattern: "", hide: hide, alias: "", color: "",
+        WindowRule(bundleId: w.bundleId, hide: hide, alias: "", color: "",
                    windowId: w.windowId, windowTitle: w.title)
     }
 
@@ -419,7 +590,10 @@ enum PrefsStore {
         if w.windowId != 0 {
             return list.firstIndex { $0.bundleId == w.bundleId && $0.windowId == w.windowId }
         }
-        return list.firstIndex { $0.bundleId == w.bundleId && $0.windowId == 0 && $0.pattern == "=\(w.title)" }
+        return list.firstIndex {
+            $0.bundleId == w.bundleId && $0.windowId == 0
+                && $0.matchers == [Matcher(kind: .exact, text: w.title)]
+        }
     }
 
     /// Hold-E: set (or clear, with "") alias and color of the rule pinned to
@@ -433,20 +607,11 @@ enum PrefsStore {
             if alias.isEmpty && color.isEmpty && !list[i].hide { list.remove(at: i) }
         } else if !alias.isEmpty || !color.isEmpty {
             var r = pinnedRule(for: w)
-            if w.windowId == 0 { r.pattern = "=\(w.title)"; r.windowTitle = "" }
+            if w.windowId == 0 { r.matchers = [Matcher(kind: .exact, text: w.title)]; r.windowTitle = "" }
             r.alias = alias; r.color = color
             list.append(r)
         }
         windowRules = list
-    }
-
-    /// Pattern syntax subset: "abc" contains; "=abc" exact;
-    /// "^abc" prefix; "abc$" suffix.
-    static func titleMatches(_ title: String, _ pattern: String) -> Bool {
-        if pattern.hasPrefix("=") { return title == String(pattern.dropFirst()) }
-        if pattern.hasPrefix("^") { return title.hasPrefix(String(pattern.dropFirst())) }
-        if pattern.hasSuffix("$") && !pattern.hasPrefix("^") { return title.hasSuffix(String(pattern.dropLast())) }
-        return title.localizedCaseInsensitiveContains(pattern)
     }
 
     // MARK: In-panel action keys (Panel pane: Close/Quit/Minimize/Hide rows)

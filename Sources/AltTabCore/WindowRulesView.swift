@@ -25,43 +25,146 @@ final class PinTarget: NSObject {
     }
 }
 
-/// "none" + palette dots; click to pick.
+/// First dot opens the system color selector (its color, converted to
+/// "#RRGGBB"), second is the screen eyedropper (click any pixel), then
+/// "none" + palette dots; click to pick. The first dot keeps the picker's
+/// last color, so tapping a palette dot and coming back restores it.
 final class ColorChoiceRow: NSView {
     var onChange: ((String) -> Void)?
-    /// "" = none; a hex outside the palette highlights nothing.
-    var value = "" { didSet { needsDisplay = true } }
+    /// "" = none; a hex outside the palette fills the first (selector) dot.
+    var value = "" {
+        didSet {
+            if let hex = selectorHex { lastCustom = hex }
+            needsDisplay = true
+        }
+    }
+    /// Last color the picker committed (selector or eyedropper); the picker
+    /// dot shows it and re-applies it after a palette or "none" tap.
+    private var lastCustom: String?
+    /// Live eyedropper, retained from `show` until it completes.
+    private var sampler: NSColorSampler?
 
-    override var intrinsicContentSize: NSSize { NSSize(width: 9 * 30, height: 28) }
+    override var intrinsicContentSize: NSSize { NSSize(width: 11 * 28, height: 28) }
 
-    private func rect(_ i: Int) -> NSRect { NSRect(x: 4 + CGFloat(i) * 30, y: 4, width: 20, height: 20) }
+    /// 0 = selector color, 1 = screen eyedropper, 2 = none, 3... = palette.
+    private func rect(_ i: Int) -> NSRect { NSRect(x: 3 + CGFloat(i) * 28, y: 5, width: 18, height: 18) }
+
+    /// The rule's color when it came from the selector (nil for none/palette).
+    private var selectorHex: String? {
+        value.isEmpty || ColorTag.palette.contains(value) ? nil : value
+    }
 
     override func draw(_ dirtyRect: NSRect) {
-        for i in 0...ColorTag.palette.count {
+        for i in 0...(ColorTag.palette.count + 2) {
             let r = rect(i)
-            if i == 0 {
+            switch i {
+            case 0:
+                if let hex = selectorHex ?? lastCustom, let c = ColorTag.color(hex) {
+                    c.setFill(); NSBezierPath(ovalIn: r).fill()
+                } else {
+                    drawWheel(r)
+                }
+            case 1:
+                drawEyedropper(r)
+            case 2:
                 NSColor.secondaryLabelColor.setStroke()
                 let o = NSBezierPath(ovalIn: r.insetBy(dx: 1, dy: 1))
                 o.lineWidth = 1.2; o.setLineDash([3, 3], count: 2, phase: 0); o.stroke()
-            } else {
-                ColorTag.color(ColorTag.palette[i - 1])?.setFill()
+            default:
+                ColorTag.color(ColorTag.palette[i - 3])?.setFill()
                 NSBezierPath(ovalIn: r).fill()
             }
-            let chosen = i == 0 ? value.isEmpty : value == ColorTag.palette[i - 1]
+            let chosen = i == 0 ? selectorHex != nil
+                : (i == 2 ? value.isEmpty : (i > 2 && value == ColorTag.palette[i - 3]))
             if chosen {
                 NSColor.labelColor.setStroke()
-                let ring = NSBezierPath(ovalIn: r.insetBy(dx: -3.5, dy: -3.5))
+                let ring = NSBezierPath(ovalIn: r.insetBy(dx: -3, dy: -3))
                 ring.lineWidth = 2; ring.stroke()
             }
         }
     }
 
+    /// Hue wheel in the empty selector dot ("pick any color").
+    private func drawWheel(_ r: NSRect) {
+        let c = NSPoint(x: r.midX, y: r.midY)
+        let wedges = 12
+        let step = 360 / CGFloat(wedges)
+        for k in 0..<wedges {
+            let w = NSBezierPath()
+            w.move(to: c)
+            w.appendArc(withCenter: c, radius: r.width / 2 - 0.5,
+                        startAngle: -90 + CGFloat(k) * step, endAngle: -90 + CGFloat(k + 1) * step)
+            w.close()
+            NSColor(hue: CGFloat(k) / CGFloat(wedges), saturation: 0.78, brightness: 0.96, alpha: 1).setFill()
+            w.fill()
+        }
+    }
+
+    /// A swatch picks on the first click, even when the prefs window is not
+    /// key yet (and while the selector panel is open).
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
-        for i in 0...ColorTag.palette.count where rect(i).insetBy(dx: -4, dy: -4).contains(p) {
-            value = i == 0 ? "" : ColorTag.palette[i - 1]
-            onChange?(value)
+        for i in 0...(ColorTag.palette.count + 2) where rect(i).insetBy(dx: -4, dy: -4).contains(p) {
+            switch i {
+            case 0:
+                // Hand back the picker's last color before the panel opens.
+                if let hex = lastCustom, hex != value { value = hex; onChange?(hex) }
+                openSelector(); return
+            case 1: sampleFromScreen(); return
+            case 2: value = ""; onChange?(""); return
+            default: value = ColorTag.palette[i - 3]; onChange?(value); return
+            }
+        }
+    }
+
+    /// Opens the system color selector; every color it lands on is stored as a
+    /// hex tag (live, so dragging previews in the switcher row below).
+    private func openSelector() {
+        let panel = NSColorPanel.shared
+        panel.showsAlpha = false
+        panel.isContinuous = true
+        if let c = ColorTag.color(selectorHex ?? value) { panel.color = c }
+        panel.setTarget(self)
+        panel.setAction(#selector(selectorChanged(_:)))
+        panel.orderFront(nil)
+    }
+
+    @objc private func selectorChanged(_ sender: NSColorPanel) {
+        guard let hex = ColorTag.hex(sender.color) else { return }
+        value = hex
+        onChange?(hex)
+    }
+
+    /// Screen eyedropper: the system loupe follows the cursor; clicking any
+    /// pixel tags with that color (Esc cancels).
+    private func sampleFromScreen() {
+        let s = NSColorSampler()
+        sampler = s
+        s.show { [weak self] color in
+            guard let self else { return }
+            self.sampler = nil
+            guard let color, let hex = ColorTag.hex(color) else { return }
+            self.value = hex
+            self.onChange?(hex)
+        }
+    }
+
+    /// Eyedropper glyph in the sampler dot ("pick a color off the screen").
+    private func drawEyedropper(_ r: NSRect) {
+        let cfg = NSImage.SymbolConfiguration(paletteColors: [NSColor.secondaryLabelColor])
+            .applying(NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold))
+        guard let img = NSImage(systemSymbolName: "eyedropper",
+                                accessibilityDescription: "Pick a color off the screen")?
+            .withSymbolConfiguration(cfg) else {
+            NSColor.secondaryLabelColor.setStroke()
+            NSBezierPath(ovalIn: r.insetBy(dx: 1, dy: 1)).stroke()
             return
         }
+        let s = img.size
+        img.draw(in: NSRect(x: r.midX - s.width / 2, y: r.midY - s.height / 2,
+                            width: s.width, height: s.height))
     }
 }
 
@@ -79,20 +182,27 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     private let scroll = NSScrollView()
     private let addButton = NSButton(title: "Add from open windows ▾", target: nil, action: nil)
     private let removeButton = NSButton(title: "−", target: nil, action: nil)
+    private let plusButton = NSButton(title: "+", target: nil, action: nil)
 
     private let detailBox = NSView()
-    private let emptyLabel = NSTextField(wrappingLabelWithString: "Customize a window to rename it, color it or hide it. Pick one from your open windows with “Add from open windows”, or hold E on a row in the switcher.")
+    private let emptyLabel = NSTextField(wrappingLabelWithString: "Customize a window to rename it, color it or hide it. Pick one from your open windows with “Add from open windows”, add a generic rule with “+”, or hold E on a row in the switcher.")
     private let headerIcon = NSImageView()
     private let headerName = NSTextField(labelWithString: "")
     private let headerBundle = NSTextField(labelWithString: "")
-    private let appliesSeg = NSSegmentedControl(labels: ["This window", "Title matches", "All windows"], trackingMode: .selectOne, target: nil, action: nil)
-    private let matchPopup = NSPopUpButton(frame: .zero)
-    private let patternField = NSTextField()
+    private let appliesSeg = NSSegmentedControl(labels: ["This window", "Match", "All windows"], trackingMode: .selectOne, target: nil, action: nil)
+    private let matchersEditor = MatcherListEditor(frame: .zero)
     private let matchCount = NSTextField(labelWithString: "")
+    private let moreDetails = NSButton(title: "▸ More details", target: nil, action: nil)
+    private let matchTable = WindowMatchTableView(frame: .zero)
+    /// Match scope's "More details" disclosure: the open-window table shown.
+    private var detailsOpen = true
     private let pinStatus = NSTextField(wrappingLabelWithString: "")
     private let relinkButton = NSButton(title: "Pick from open windows ▾", target: nil, action: nil)
-    private var patternRowView: NSStackView?
     private var pinRowView: NSStackView?
+    /// Conditions stashed when the scope leaves "Match" (persistently
+    /// clearing on every segment click would throw them away by accident).
+    private var stashedMatchers: [PrefsStore.Matcher] = []
+    private var stashedMatchAll = false
     private let aliasField = NSTextField()
     private let letterLabel = NSTextField(labelWithString: "")
     private let colors = ColorChoiceRow()
@@ -101,21 +211,25 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     private let preview = PanelRowView()
     private let removeRule = NSButton(title: "Remove customization", target: nil, action: nil)
 
-    private static let matchKinds = ["Contains", "Exact", "Starts with", "Ends with"]
-
     override init(frame: NSRect) {
         super.init(frame: frame)
         build()
         observer = NotificationCenter.default.addObserver(
             forName: PrefsStore.windowRulesChanged, object: nil, queue: .main) { [weak self] _ in
             // Our own writes already match `rules`: reloading would reset
-            // transient form state (e.g. "Title matches" with an empty pattern).
+            // transient form state (e.g. "Match" with an empty pattern).
             guard let self, PrefsStore.windowRules != self.rules else { return }
             self.reload()
         }
+        // Every tracker sweep rebuilds the open-window model: keep the count
+        // line, the More-details table and the preview in step with it.
+        WindowTracker.shared.addChangeHandler("rules") { [weak self] in self?.updateDynamic() }
     }
     required init?(coder: NSCoder) { fatalError("unsupported") }
-    deinit { if let o = observer { NotificationCenter.default.removeObserver(o) } }
+    deinit {
+        if let o = observer { NotificationCenter.default.removeObserver(o) }
+        WindowTracker.shared.removeChangeHandler("rules")
+    }
 
     // MARK: Build
 
@@ -127,9 +241,11 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     }
 
     private func build() {
-        // Left: list + buttons.
+        // Left: list + buttons. The sidebar is as wide as the footer row
+        // ("Add from open windows" + − +): its frame's right edge lands on the
+        // + button's right edge (216 frame − 8 of bezel = 208 of list).
         let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("rule"))
-        col.width = 180
+        col.width = 208
         table.addTableColumn(col)
         table.headerView = nil
         table.rowHeight = 46
@@ -143,6 +259,9 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         removeButton.target = self; removeButton.action = #selector(removePressed(_:))
         removeButton.bezelStyle = .smallSquare; removeButton.controlSize = .small
         removeButton.toolTip = "Remove the selected customization"
+        plusButton.target = self; plusButton.action = #selector(addGenericPressed(_:))
+        plusButton.bezelStyle = .smallSquare; plusButton.controlSize = .small
+        plusButton.toolTip = "Add a generic rule — any window, narrowed by a title pattern"
 
         // Right: detail form.
         headerName.font = .systemFont(ofSize: 15, weight: .semibold)
@@ -152,15 +271,19 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         appliesSeg.controlSize = .small
         appliesSeg.segmentStyle = .rounded
         for i in 0..<3 { appliesSeg.setWidth(98, forSegment: i) }
-        matchPopup.addItems(withTitles: Self.matchKinds)
-        matchPopup.controlSize = .small
-        matchPopup.target = self; matchPopup.action = #selector(patternEdited(_:))
-        for f in [patternField, aliasField] {
-            f.delegate = self
-            f.controlSize = .small
-            f.bezelStyle = .roundedBezel
+        matchersEditor.onEdit = { [weak self] matchers, matchAll in
+            self?.mutate { $0.matchers = matchers; $0.matchAll = matchAll }
         }
-        patternField.placeholderString = "Window title"
+        moreDetails.target = self; moreDetails.action = #selector(detailsToggled(_:))
+        moreDetails.isBordered = false
+        moreDetails.setButtonType(.momentaryChange)
+        updateDetailsButton()
+        matchTable.onPick = { [weak self] attribute, value in
+            self?.matchersEditor.fillFocused(attribute: attribute, value: value)
+        }
+        aliasField.delegate = self
+        aliasField.controlSize = .small
+        aliasField.bezelStyle = .roundedBezel
         aliasField.placeholderString = "App name shown in the switcher"
         matchCount.font = .systemFont(ofSize: 11); matchCount.textColor = .secondaryLabelColor
         pinStatus.font = .systemFont(ofSize: 11); pinStatus.maximumNumberOfLines = 3
@@ -180,15 +303,15 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         let header = row([headerIcon, { () -> NSStackView in
             let v = NSStackView(views: [headerName, headerBundle]); v.orientation = .vertical
             v.alignment = .leading; v.spacing = 1; return v }()], spacing: 10)
-        let patternRow = row([matchPopup, patternField])
         let pinRow = NSStackView(views: [pinStatus, relinkButton])
         pinRow.orientation = .vertical; pinRow.alignment = .leading; pinRow.spacing = 6
-        patternRowView = patternRow; pinRowView = pinRow
+        pinRowView = pinRow
+        let countRow = row([matchCount, moreDetails], spacing: 8)
         let aliasRow = row([aliasField, letterLabel])
         let hideRow = row([hideSwitch, NSTextField(labelWithString: "Hide from the switcher")], spacing: 8)
         let form = NSStackView(views: [
             header,
-            smallLabel("APPLIES TO"), appliesSeg, pinRow, patternRow, matchCount,
+            smallLabel("APPLIES TO"), appliesSeg, pinRow, matchersEditor, countRow, matchTable,
             smallLabel("ALIAS"), aliasRow,
             smallLabel("COLOR"), colors,
             smallLabel("VISIBILITY"), hideRow,
@@ -196,12 +319,22 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         ])
         form.orientation = .vertical; form.alignment = .leading; form.spacing = 6
         form.setCustomSpacing(14, after: header)
-        form.setCustomSpacing(14, after: matchCount)
+        form.setCustomSpacing(14, after: countRow)
         form.setCustomSpacing(14, after: aliasRow)
         form.setCustomSpacing(14, after: colors)
         form.setCustomSpacing(18, after: hideRow)
+        // The form can outgrow the pane (matcher rows + the 266pt table), so it
+        // lives in a scroll view: everything stays reachable at any size.
         form.translatesAutoresizingMaskIntoConstraints = false
-        detailBox.addSubview(form)
+        let formHolder = FlippedView()
+        formHolder.translatesAutoresizingMaskIntoConstraints = false
+        formHolder.addSubview(form)
+        let formScroll = NSScrollView()
+        formScroll.drawsBackground = false
+        formScroll.hasVerticalScroller = true
+        formScroll.autohidesScrollers = true
+        formScroll.documentView = formHolder
+        detailBox.addSubview(formScroll)
 
         // Bottom: live preview.
         let previewTitle = smallLabel("PREVIEW — HOW IT LOOKS IN THE SWITCHER")
@@ -211,39 +344,52 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         preview.translatesAutoresizingMaskIntoConstraints = false
         previewHolder.addSubview(preview)
 
-        for v in [scroll, addButton, removeButton, detailBox, emptyLabel, previewTitle, previewHolder] {
+        for v in [scroll, addButton, removeButton, plusButton, detailBox, formScroll, emptyLabel, previewTitle, previewHolder] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
-        for v in [headerIcon, patternField, aliasField, matchPopup, colors, appliesSeg] {
+        for v in [headerIcon, matchersEditor, aliasField, colors, appliesSeg, matchTable] {
             v.translatesAutoresizingMaskIntoConstraints = false
         }
         NSLayoutConstraint.activate([
             scroll.topAnchor.constraint(equalTo: topAnchor, constant: 4),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
-            scroll.widthAnchor.constraint(equalToConstant: 188),
+            scroll.widthAnchor.constraint(equalToConstant: 216),
             scroll.bottomAnchor.constraint(equalTo: previewTitle.topAnchor, constant: -50),
             addButton.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 6),
             addButton.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
             removeButton.centerYAnchor.constraint(equalTo: addButton.centerYAnchor),
             removeButton.leadingAnchor.constraint(equalTo: addButton.trailingAnchor, constant: 6),
             removeButton.widthAnchor.constraint(equalToConstant: 26),
+            plusButton.centerYAnchor.constraint(equalTo: addButton.centerYAnchor),
+            plusButton.leadingAnchor.constraint(equalTo: removeButton.trailingAnchor, constant: 6),
+            plusButton.widthAnchor.constraint(equalToConstant: 26),
 
             detailBox.topAnchor.constraint(equalTo: topAnchor, constant: 4),
             detailBox.leadingAnchor.constraint(equalTo: scroll.trailingAnchor, constant: 16),
             detailBox.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
             detailBox.bottomAnchor.constraint(equalTo: scroll.bottomAnchor),
-            form.topAnchor.constraint(equalTo: detailBox.topAnchor),
-            form.leadingAnchor.constraint(equalTo: detailBox.leadingAnchor),
-            form.trailingAnchor.constraint(lessThanOrEqualTo: detailBox.trailingAnchor),
+            formScroll.topAnchor.constraint(equalTo: detailBox.topAnchor),
+            formScroll.leadingAnchor.constraint(equalTo: detailBox.leadingAnchor),
+            formScroll.trailingAnchor.constraint(equalTo: detailBox.trailingAnchor),
+            formScroll.bottomAnchor.constraint(equalTo: detailBox.bottomAnchor),
+            formHolder.topAnchor.constraint(equalTo: formScroll.contentView.topAnchor),
+            formHolder.leadingAnchor.constraint(equalTo: formScroll.contentView.leadingAnchor),
+            formHolder.widthAnchor.constraint(equalTo: formScroll.contentView.widthAnchor),
+            form.topAnchor.constraint(equalTo: formHolder.topAnchor),
+            form.leadingAnchor.constraint(equalTo: formHolder.leadingAnchor),
+            form.trailingAnchor.constraint(lessThanOrEqualTo: formHolder.trailingAnchor),
+            form.bottomAnchor.constraint(equalTo: formHolder.bottomAnchor, constant: -10),
             emptyLabel.centerXAnchor.constraint(equalTo: detailBox.centerXAnchor),
             emptyLabel.centerYAnchor.constraint(equalTo: detailBox.centerYAnchor),
             emptyLabel.widthAnchor.constraint(equalTo: detailBox.widthAnchor, constant: -24),
 
             headerIcon.widthAnchor.constraint(equalToConstant: 34),
             headerIcon.heightAnchor.constraint(equalToConstant: 34),
-            matchPopup.widthAnchor.constraint(equalToConstant: 104),
-            patternField.widthAnchor.constraint(equalToConstant: 190),
+            matchersEditor.widthAnchor.constraint(equalTo: detailBox.widthAnchor),
+            matchersEditor.heightAnchor.constraint(greaterThanOrEqualToConstant: 62),
+            matchTable.widthAnchor.constraint(equalTo: detailBox.widthAnchor),
+            matchTable.heightAnchor.constraint(equalToConstant: WindowMatchTableView.height),
             aliasField.widthAnchor.constraint(equalToConstant: 226),
             pinStatus.widthAnchor.constraint(equalToConstant: 290),
 
@@ -296,31 +442,27 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: w)
     }
 
-    // MARK: Pattern <-> controls
+    // MARK: Matchers
 
-    private static func decode(_ p: String) -> (kind: Int, text: String) {
-        if p.hasPrefix("=") { return (1, String(p.dropFirst())) }
-        if p.hasPrefix("^") { return (2, String(p.dropFirst())) }
-        if p.hasSuffix("$") { return (3, String(p.dropLast())) }
-        return (0, p)
-    }
-    private static func encode(kind: Int, text: String) -> String {
-        guard !text.isEmpty else { return "" }
-        switch kind {
-        case 1: return "=" + text
-        case 2: return "^" + text
-        case 3: return text + "$"
-        default: return text
+    /// One-line scope for the list: "any" / "all" of a few quoted conditions.
+    private static func matcherSummary(_ r: PrefsStore.WindowRule) -> String {
+        guard !r.matchers.isEmpty else { return "All windows" }
+        let quoted = r.matchers.map {
+            $0.attribute == .title ? "“\($0.text)”" : "\($0.attribute.short) “\($0.text)”"
         }
-    }
-    private func composedPattern() -> String {
-        appliesSeg.selectedSegment != 1 ? "" :
-            Self.encode(kind: matchPopup.indexOfSelectedItem, text: patternField.stringValue)
+        let shown = quoted.prefix(2).joined(separator: ", ")
+        let more = quoted.count > 2 ? ", …" : ""
+        return (r.matchers.count > 1 ? (r.matchAll ? "all of: " : "any of: ") : "")
+            + (r.matchers.count == 1 ? quoted[0] : shown + more)
     }
 
     // MARK: Detail
 
     private func loadDetail() {
+        // A new selection invalidates any stashed conditions: they may only be
+        // restored into the rule that was on screen when they were stashed.
+        stashedMatchers = []
+        stashedMatchAll = false
         guard let i = selected else {
             formView?.isHidden = true
             emptyLabel.isHidden = false
@@ -333,13 +475,14 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         previewHolder.isHidden = false
         removeButton.isEnabled = true
         let r = rules[i]
-        headerIcon.image = AppInfo.icon(r.bundleId)
-        headerName.stringValue = AppInfo.name(r.bundleId)
-        headerBundle.stringValue = r.bundleId
-        let d = Self.decode(r.pattern)
-        appliesSeg.selectedSegment = r.windowId != 0 ? 0 : (r.pattern.isEmpty ? 2 : 1)
-        matchPopup.selectItem(at: d.kind)
-        patternField.stringValue = d.text
+        let generic = r.bundleId.isEmpty
+        headerIcon.image = generic ? nil : AppInfo.icon(r.bundleId)
+        headerName.stringValue = generic ? "Generic rule" : AppInfo.name(r.bundleId)
+        headerBundle.stringValue = generic ? "Every app — narrowed by its title pattern" : r.bundleId
+        appliesSeg.setEnabled(!generic, forSegment: 0)
+        appliesSeg.selectedSegment = r.windowId != 0 ? 0 : (r.matchers.isEmpty ? 2 : 1)
+        matchersEditor.load(matchers: r.matchers, matchAll: r.matchAll)
+        matchTable.update(rule: r, windows: WindowTracker.shared.windows)
         applyScopeVisibility()
         aliasField.stringValue = r.alias
         colors.value = r.color
@@ -347,12 +490,15 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         updateDynamic()
     }
 
-    /// Pinned scope shows the window link row; title scope shows the pattern row.
+    /// Pinned scope shows the window link row; Match scope shows the editor,
+    /// its More-details table and the count line.
     private func applyScopeVisibility() {
         let seg = appliesSeg.selectedSegment
         pinRowView?.isHidden = seg != 0
-        patternRowView?.isHidden = seg != 1
+        matchersEditor.isHidden = seg != 1
         matchCount.isHidden = seg == 0
+        moreDetails.isHidden = seg != 1
+        matchTable.isHidden = seg != 1 || !detailsOpen
     }
 
     private func isOpen(_ r: PrefsStore.WindowRule) -> WindowModel? {
@@ -372,15 +518,20 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
                 pinStatus.stringValue = "○ Not open (closed, or its id changed) — re-link below.\nLast seen: “\(r.windowTitle)”"
                 pinStatus.textColor = .systemOrange
             }
+        } else {
+            pinStatus.stringValue = r.bundleId.isEmpty
+                ? "○ Not linked — every window matches until you pick one below."
+                : "○ Not linked — every \(AppInfo.name(r.bundleId)) window matches until you pick one below."
+            pinStatus.textColor = .systemOrange
         }
         matchCount.stringValue = n == 0 ? "No open windows match right now"
             : "✓ Matches \(n) open window\(n == 1 ? "" : "s") now"
         let name = r.alias.isEmpty ? AppInfo.name(r.bundleId) : r.alias
-        let letter = name.lowercased().first { $0.isLetter }
+        let letter = name.quickGoLetter
         letterLabel.stringValue = letter.map { "quick-go: \($0)" } ?? ""
 
         let live = WindowTracker.shared.windows.first { PrefsStore.ruleMatches(r, window: $0) }
-        let fallback = r.windowId != 0 ? r.windowTitle : Self.decode(r.pattern).text
+        let fallback = r.windowId != 0 ? r.windowTitle : r.matchers.first?.text ?? ""
         let title = live?.title ?? (fallback.isEmpty ? "Window title" : fallback)
         let pid = live?.pid ?? NSRunningApplication.runningApplications(withBundleIdentifier: r.bundleId).first?.processIdentifier ?? 0
         var wm = WindowModel(pid: pid, bundleId: r.bundleId, appLocalName: AppInfo.name(r.bundleId),
@@ -390,37 +541,67 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         preview.configure(wm, globalIndex: 0, hint: letter)
         preview.setHighlighted(true)
         preview.alphaValue = r.hide ? 0.45 : 1
+        matchTable.update(rule: r, windows: WindowTracker.shared.windows)
+    }
+
+    /// "More details": the open-window table collapses to just the count line.
+    @objc private func detailsToggled(_ sender: NSButton) {
+        detailsOpen.toggle()
+        applyScopeVisibility()
+        updateDetailsButton()
+    }
+
+    /// The disclosure's title flips with its state.
+    private func updateDetailsButton() {
+        moreDetails.attributedTitle = NSAttributedString(
+            string: detailsOpen ? "▾ Hide details" : "▸ More details",
+            attributes: [.foregroundColor: NSColor.controlAccentColor,
+                         .font: NSFont.systemFont(ofSize: 11, weight: .medium)])
     }
 
     // MARK: Actions
 
     @objc private func appliesChanged(_ sender: NSSegmentedControl) {
-        guard let i = selected else { return }
+        guard selected != nil else { return }
         switch sender.selectedSegment {
         case 0:
-            // Needs a window to pin to: ask now; cancelling snaps back.
-            if rules[i].windowId == 0 {
-                showWindowPicker(from: sender, forSelectedRule: true)
-                if selected.map({ rules[$0].windowId == 0 }) ?? true { loadDetail() }
-            }
-        case 1:
-            mutate { $0.windowId = 0; $0.windowTitle = ""; $0.pattern = composedPattern() }
+            // Just open the tab: a window link is explicit — the "Pick from
+            // open windows" button below, not a forced picker popup. No title
+            // match survives into this scope.
+            stashMatchers()
+            mutate { $0.matchers = []; $0.windowId = 0; $0.windowTitle = "" }
             applyScopeVisibility()
-            window?.makeFirstResponder(patternField)
+        case 1:
+            mutate {
+                $0.windowId = 0; $0.windowTitle = ""
+                if $0.matchers.isEmpty { $0.matchers = stashedMatchers; $0.matchAll = stashedMatchAll }
+            }
+            if let i = selected { matchersEditor.load(matchers: rules[i].matchers, matchAll: rules[i].matchAll) }
+            applyScopeVisibility()
+            matchersEditor.focusFirstField()
         default:
-            mutate { $0.windowId = 0; $0.windowTitle = ""; $0.pattern = "" }
+            stashMatchers()
+            mutate { $0.matchers = []; $0.windowId = 0; $0.windowTitle = "" }
             applyScopeVisibility()
         }
         if let s = selected { _ = s; updateDynamic() }
     }
 
+    /// Remembers the selected rule's conditions before a scope that ignores
+    /// them clears the field.
+    private func stashMatchers() {
+        guard let i = selected, !rules[i].matchers.isEmpty else { return }
+        stashedMatchers = rules[i].matchers
+        stashedMatchAll = rules[i].matchAll
+    }
+
     @objc private func relinkPressed(_ sender: NSButton) {
-        showWindowPicker(from: sender, forSelectedRule: true)
+        showWindowPicker(from: sender)
     }
 
     /// Open windows of the rule's app first, every other app under "Other apps".
     /// Picking pins the selected rule to that window (new id, same settings).
-    private func showWindowPicker(from view: NSView, forSelectedRule: Bool) {
+    private func showWindowPicker(from view: NSView) {
         guard let i = selected else { return }
         let menu = NSMenu()
         let same = WindowTracker.shared.windows.filter { $0.bundleId == rules[i].bundleId && !$0.title.isEmpty }
@@ -455,16 +636,15 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
 
     @objc private func pinPicked(_ sender: NSMenuItem) {
         guard let t = sender.representedObject as? PinTarget, t.windowId != 0 else { return }
-        mutate { $0.bundleId = t.bundleId; $0.windowId = t.windowId; $0.windowTitle = t.title; $0.pattern = "" }
+        stashMatchers()
+        mutate { $0.bundleId = t.bundleId; $0.windowId = t.windowId; $0.windowTitle = t.title; $0.matchers = [] }
         loadDetail()
     }
-    @objc private func patternEdited(_ sender: Any?) { mutate { $0.pattern = composedPattern() } }
     @objc private func hideToggled(_ sender: NSSwitch) { mutate { $0.hide = sender.state == .on } }
 
     func controlTextDidChange(_ obj: Notification) {
         guard let f = obj.object as? NSTextField else { return }
-        if f === patternField { mutate { $0.pattern = composedPattern() } }
-        else if f === aliasField { mutate { $0.alias = f.stringValue.trimmingCharacters(in: .whitespaces) } }
+        if f === aliasField { mutate { $0.alias = f.stringValue.trimmingCharacters(in: .whitespaces) } }
     }
 
     @objc private func removePressed(_ sender: Any?) {
@@ -475,6 +655,26 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         if !rules.isEmpty { table.selectRowIndexes([min(i, rules.count - 1)], byExtendingSelection: false) }
         loadDetail()
         WindowTracker.shared.refresh(reason: "rules")
+    }
+
+    /// "+": a generic rule — not tied to an app or a window; the title pattern
+    /// (empty = every window) decides what it applies to.
+    @objc private func addGenericPressed(_ sender: Any?) {
+        if let existing = rules.firstIndex(where: { $0.bundleId.isEmpty && $0.windowId == 0 && $0.matchers.isEmpty }) {
+            table.selectRowIndexes([existing], byExtendingSelection: false)
+            table.scrollRowToVisible(existing)
+        } else {
+            rules.append(PrefsStore.WindowRule(bundleId: "", hide: false, alias: "", color: ""))
+            PrefsStore.windowRules = rules
+            table.reloadData()
+            table.selectRowIndexes([rules.count - 1], byExtendingSelection: false)
+            table.scrollRowToVisible(rules.count - 1)
+        }
+        loadDetail()
+        // Nothing matches "all windows" on purpose yet: start on the matchers.
+        appliesSeg.selectedSegment = 1
+        applyScopeVisibility()
+        matchersEditor.focusFirstField()
     }
 
     @objc private func addPressed(_ sender: NSButton) {
@@ -518,12 +718,12 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         guard let t = sender.representedObject as? PinTarget else { return }
         let pinned = t.windowId != 0
         if let existing = rules.firstIndex(where: {
-            $0.bundleId == t.bundleId && (pinned ? $0.windowId == t.windowId : ($0.windowId == 0 && $0.pattern.isEmpty))
+            $0.bundleId == t.bundleId && (pinned ? $0.windowId == t.windowId : ($0.windowId == 0 && $0.matchers.isEmpty))
         }) {
             table.selectRowIndexes([existing], byExtendingSelection: false)
             table.scrollRowToVisible(existing)
         } else {
-            rules.append(PrefsStore.WindowRule(bundleId: t.bundleId, pattern: "", hide: false,
+            rules.append(PrefsStore.WindowRule(bundleId: t.bundleId, hide: false,
                                                alias: "", color: "", windowId: t.windowId, windowTitle: t.title))
             PrefsStore.windowRules = rules
             table.reloadData()
@@ -542,6 +742,7 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let r = rules[row]
+        let generic = r.bundleId.isEmpty
         let cell = NSTableCellView(frame: NSRect(x: 0, y: 0, width: 180, height: 46))
         let bar = NSView(frame: NSRect(x: 0, y: 8, width: 3, height: 30))
         bar.wantsLayer = true
@@ -549,16 +750,21 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         bar.layer?.backgroundColor = ColorTag.color(r.color)?.cgColor
         bar.isHidden = r.color.isEmpty
         let icon = NSImageView(frame: NSRect(x: 8, y: 10, width: 26, height: 26))
-        icon.image = AppInfo.icon(r.bundleId)
-        let title = NSTextField(labelWithString: r.alias.isEmpty ? AppInfo.name(r.bundleId) : r.alias)
+        if generic {
+            icon.image = NSImage(systemSymbolName: "asterisk", accessibilityDescription: "Every app")
+            icon.contentTintColor = .secondaryLabelColor
+        } else {
+            icon.image = AppInfo.icon(r.bundleId)
+        }
+        let ruleName = generic ? "Generic rule" : AppInfo.name(r.bundleId)
+        let title = NSTextField(labelWithString: r.alias.isEmpty ? ruleName : r.alias)
         title.font = .systemFont(ofSize: 12.5, weight: .semibold)
-        let d = Self.decode(r.pattern)
         let scope: String
         if r.windowId != 0 {
             let open = WindowTracker.shared.windows.contains { PrefsStore.ruleMatches(r, window: $0) }
             scope = "This window" + (open ? "" : " (not open)") + (r.windowTitle.isEmpty ? "" : " · “\(r.windowTitle)”")
         } else {
-            scope = r.pattern.isEmpty ? "All windows" : ["", "= ", "starts ", "ends "][d.kind] + "“\(d.text)”"
+            scope = Self.matcherSummary(r)
         }
         let sub = NSTextField(labelWithString: (r.alias.isEmpty ? scope : "\(AppInfo.name(r.bundleId)) · \(scope)"))
         sub.font = .systemFont(ofSize: 10.5); sub.textColor = .secondaryLabelColor
@@ -578,4 +784,10 @@ final class WindowRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         cell.textField = title
         return cell
     }
+}
+
+/// Top-anchored host for the scrolling detail form (an NSScrollView's document
+/// starts at the bottom unless its view is flipped).
+private final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
 }

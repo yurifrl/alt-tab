@@ -529,11 +529,22 @@ func runTrackDemo() {
 func runPrefsUIDemo() {
     NSApplication.shared.setActivationPolicy(.regular)
     PrefsStore.windowRules = [
-        .init(bundleId: "com.google.Chrome", pattern: "", hide: false, alias: "Work Chrome", color: "#34d399", windowId: 4821, windowTitle: "Google Cloud Platform - Google Chrome - Yuri (Nsx)"),
-        .init(bundleId: "com.google.Chrome", pattern: "Trail-code", hide: false, alias: "Personal Chrome", color: "#f97316"),
-        .init(bundleId: "com.google.Chrome", pattern: "^New Tab", hide: true, alias: "Dev Chrome", color: ""),
-        .init(bundleId: "com.apple.Terminal", pattern: "", hide: false, alias: "", color: "#a855f7"),
+        // Off-palette color on the first rule: shows the picker dot filled.
+        .init(bundleId: "com.google.Chrome", hide: false, alias: "Work Chrome", color: "#7c5cff", windowId: 4821, windowTitle: "Google Cloud Platform - Google Chrome - Yuri (Nsx)"),
+        // Two conditions in "all" mode, one of them a regex: the boxed editor.
+        .init(bundleId: "com.google.Chrome",
+              matchers: [.init(kind: .contains, text: "Trail-code"),
+                         .init(attribute: .windowId, kind: .isExactly, text: "51204"),
+                         .init(kind: .regex, text: "^PR #\\d+")],
+              matchAll: true, hide: false, alias: "Personal Chrome", color: "#f97316"),
+        .init(bundleId: "com.google.Chrome", matchers: [.init(kind: .startsWith, text: "New Tab")], hide: true, alias: "Dev Chrome", color: ""),
+        .init(bundleId: "com.apple.Terminal", hide: false, alias: "", color: "#a855f7"),
+        .init(bundleId: "", matchers: [.init(kind: .contains, text: "Meeting")], hide: false, alias: "", color: "#22c55e"),
     ]
+    // The Match table lists what the switcher sees, so the demo needs a live
+    // tracker: one sweep populates it before the window appears.
+    WindowTracker.shared.start()
+    WindowTracker.shared.refresh(reason: "prefs-ui demo")
     PrefsWindowController.shared.showTab("Windows")
     PrefsWindowController.shared.showWindow(nil)
     NSApplication.shared.run()
@@ -556,6 +567,60 @@ func runPrefsDemo() {
     PrefsStore.maxRows = 11
     if PrefsStore.maxRows != 11 { failures.append("maxRows") }
     PrefsStore.maxRows = 8
+
+    // Generic rule ("+" in the Rules pane): an app-less row matches windows of
+    // any app, its title pattern narrows it, and specifics outrank it.
+    let savedRules = PrefsStore.windowRules
+    let probe = WindowModel(pid: 0, bundleId: "com.example.app", appLocalName: "Example",
+                            title: "Inbox — Example", frame: .zero, minimized: false, ax: nil)
+    var generic = PrefsStore.WindowRule(bundleId: "", hide: false, alias: "Anything", color: "")
+    if !PrefsStore.ruleMatches(generic, window: probe) { failures.append("generic rule missed a window") }
+    generic.matchers = [PrefsStore.Matcher(kind: .contains, text: "Inbox")]
+    if !PrefsStore.ruleMatches(generic, window: probe) { failures.append("generic pattern missed its window") }
+    generic.matchers = [PrefsStore.Matcher(kind: .contains, text: "Sent")]
+    if PrefsStore.ruleMatches(generic, window: probe) { failures.append("generic pattern over-matched") }
+    generic.matchers = []
+
+    // Matchers: kinds compare, "all" needs every condition, a bad regex never matches.
+    var multi = PrefsStore.WindowRule(bundleId: "",
+                                      matchers: [PrefsStore.Matcher(kind: .regex, text: "^Inbox —"),
+                                                 PrefsStore.Matcher(kind: .endsWith, text: "Example")],
+                                      matchAll: true, hide: false, alias: "Both", color: "")
+    if !PrefsStore.ruleMatches(multi, window: probe) { failures.append("all-mode matchers missed") }
+    multi.matchAll = false
+    if !PrefsStore.ruleMatches(multi, window: probe) { failures.append("any-mode matchers missed") }
+    multi.matchAll = true
+    multi.matchers[1].text = "Sent"
+    if PrefsStore.ruleMatches(multi, window: probe) { failures.append("all-mode matchers over-matched") }
+    multi.matchers = [PrefsStore.Matcher(kind: .regex, text: "In(box")]
+    if PrefsStore.ruleMatches(multi, window: probe) { failures.append("invalid regex matched") }
+    multi.matchers = [PrefsStore.Matcher(kind: .exact, text: "Inbox — Example")]
+    if !PrefsStore.ruleMatches(multi, window: probe) { failures.append("exact-matcher missed") }
+
+    // Attributes: conditions can look at the window id / app / bundle / pid, and
+    // a string kind left on a numeric attribute must match nothing.
+    var idProbe = WindowModel(pid: 501, bundleId: "com.example.app", appLocalName: "Example",
+                              title: "Inbox — Example", frame: .zero, minimized: false, ax: nil)
+    idProbe.windowId = 4821
+    if !PrefsStore.Matcher(attribute: .windowId, kind: .isExactly, text: "4821").matches(idProbe) { failures.append("window-id condition missed") }
+    if PrefsStore.Matcher(attribute: .windowId, kind: .isNot, text: "4821").matches(idProbe) { failures.append("window-id is-not over-matched") }
+    if !PrefsStore.Matcher(attribute: .pid, kind: .isExactly, text: "501").matches(idProbe) { failures.append("pid condition missed") }
+    if !PrefsStore.Matcher(attribute: .app, kind: .contains, text: "exam").matches(idProbe) { failures.append("app-name condition missed") }
+    if !PrefsStore.Matcher(attribute: .bundle, kind: .startsWith, text: "com.example").matches(idProbe) { failures.append("bundle condition missed") }
+    if PrefsStore.Matcher(attribute: .windowId, kind: .contains, text: "48").matches(idProbe) { failures.append("string kind matched a numeric attribute") }
+    if PrefsStore.Matcher.isValidRegex("^In(box") { failures.append("regex validity check") }
+
+    let patterned = PrefsStore.WindowRule(bundleId: "", matchers: [PrefsStore.Matcher(kind: .contains, text: "Inbox")], hide: false, alias: "Inbox only", color: "")
+    let appWide = PrefsStore.WindowRule(bundleId: "com.example.app", hide: false, alias: "App-wide", color: "")
+    PrefsStore.windowRules = [generic, appWide]
+    if PrefsStore.alias(for: probe) != "App-wide" { failures.append("generic outranked an app-wide rule") }
+    PrefsStore.windowRules = [generic, patterned]
+    if PrefsStore.alias(for: probe) != "Inbox only" { failures.append("generic outranked a pattern rule") }
+    generic.hide = true
+    PrefsStore.windowRules = [generic]
+    if !PrefsStore.isExcluded(probe) { failures.append("generic hide rule did not exclude") }
+    PrefsStore.windowRules = savedRules
+
     print("prefs: theme=\(PrefsStore.theme.rawValue) shortcuts=\(PrefsStore.shortcuts.count) on=\(PrefsStore.shortcuts.filter(\.on).count)")
     print(failures.isEmpty ? "PASS" : "FAIL: \(failures.joined(separator: "; "))")
     exit(failures.isEmpty ? 0 : 1)
@@ -563,22 +628,93 @@ func runPrefsDemo() {
 
 // MARK: - Extras demos (Phase 6)
 
+/// Spins the runloop until `predicate` holds (or `timeout`): tracker sweeps
+/// apply their model, and the panel re-renders, on later main-loop turns.
+func waitForModel(_ predicate: () -> Bool, timeout: TimeInterval = 5) {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !predicate() && Date() < deadline {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+    }
+}
+
+/// The tracker's async AX sweep applies its model on main, so a synchronous
+/// demo must let the runloop turn before asserting on rows.
+func waitForTrackerModel(_ timeout: TimeInterval = 5) {
+    waitForModel({ !WindowTracker.shared.windows.isEmpty }, timeout: timeout)
+}
+
 func runExtrasDemo() {
     NSApplication.shared.setActivationPolicy(.accessory)
     var failures: [String] = []
 
-    // Search: type-to-filter narrows rows, commits the filtered selection.
+    // Search: a typed query ranks its best match first (and selects it).
     _ = SwitcherSession.shared.installDemoShortcut(key: UInt32(kVK_ANSI_W), mods: UInt32(controlKey | optionKey | cmdKey))
+    waitForTrackerModel()
     SwitcherSession.shared.openForTest()
     let rowBefore = SwitcherSession.shared.panelRows
     SwitcherSession.shared.typeForTest("ter")
     let rowAfter = SwitcherSession.shared.panelRows
-    if !(rowAfter.count < rowBefore.count) { failures.append("search did not narrow \(rowBefore)→\(rowAfter)") }
+    // Search ranks, never filters (see `trackerRows`).
+    let top = rowAfter.first
+    if top == nil || SearchText.score(app: top!.displayName, title: top!.title, query: "ter") == 0 {
+        failures.append("search did not rank a match first")
+    }
+    if rowAfter.count != rowBefore.count { failures.append("search filtered \(rowBefore.count)→\(rowAfter.count) rows") }
+    if SwitcherSession.shared.isOpen { SwitcherSession.shared.close(commit: false) }
+
+    // Select letters (spec 001): a letter several rows carry selects
+    // the first; pressing it again walks forward to the carriers below
+    // (SL-2/SL-6) and, with no carrier left below, types again instead of
+    // wrapping (SL-3/SL-10). The exhaustive rule checks live in `spec` mode.
+    SwitcherSession.shared.openForTest()
+    let letterRows = SwitcherSession.shared.panelRows
+    let dupLetters = Dictionary(grouping: letterRows.indices,
+                                by: { letterRows[$0].displayName.quickGoLetter })
+        .filter { $0.key != nil && $0.value.count > 1 }
+    if let (key, _) = dupLetters.first, let letter = key {
+        SwitcherSession.shared.pressForTest(letter)
+        let firstRow = SwitcherSession.shared.panelSelection
+        let query = SwitcherSession.shared.panelQuery
+        var carriers = SwitcherSession.shared.panelRows.indices.filter {
+            SwitcherSession.shared.panelRows[$0].displayName.quickGoLetter == letter
+        }
+        SwitcherSession.shared.pressForTest(letter)
+        let stepped = SwitcherSession.shared.panelSelection
+        if stepped == firstRow { failures.append("select letter \"\(letter)\" did not step (SL-2)") }
+        if !carriers.contains(stepped) { failures.append("select letter \"\(letter)\" left its rows (SL-2)") }
+        // Walk to the last carrier below; the next repeat must type again
+        // (SL-3/SL-10) — the old behavior wrapped back to the first carrier.
+        var row = stepped
+        var steps = 1
+        var typed = false
+        while steps < carriers.count + 1 {
+            SwitcherSession.shared.pressForTest(letter)
+            let next = SwitcherSession.shared.panelSelection
+            if next == 0 { typed = true; break }              // SL-3: typed again
+            carriers = SwitcherSession.shared.panelRows.indices.filter {
+                SwitcherSession.shared.panelRows[$0].displayName.quickGoLetter == letter
+            }
+            if next <= row || !carriers.contains(next) { break }   // a wrap — reported below
+            row = next
+            steps += 1
+        }
+        if !typed { failures.append("select letter \"\(letter)\" did not stop by typing (SL-3/SL-10)") }
+        if typed, SwitcherSession.shared.panelQuery != query + String(letter) {
+            failures.append("select letter \"\(letter)\" typed press did not append (SL-1/SL-3)")
+        } else if !typed, SwitcherSession.shared.panelQuery != query {
+            failures.append("stepping appended to the query (SL-2)")
+        }
+        print("extras: select letter \"\(letter)\" \(carriers.count) carriers, \(firstRow)→\(stepped), \(steps) forward step(s), then \(typed ? "typed again" : "did not stop")")
+    } else {
+        print("extras: select letter walk — skipped, no letter carried by 2+ rows")
+    }
     if SwitcherSession.shared.isOpen { SwitcherSession.shared.close(commit: false) }
 
     // Workspaces excludes: excluded bundle id never rendered.
-    PrefsStore.windowRules = [PrefsStore.WindowRule(bundleId: "com.google.Chrome", pattern: "", hide: true, alias: "")]
+    PrefsStore.windowRules = [PrefsStore.WindowRule(bundleId: "com.google.Chrome", hide: true, alias: "")]
     SwitcherSession.shared.openForTest()
+    // The sweep that drops excluded windows lands on a later main-loop turn.
+    waitForModel { !SwitcherSession.shared.panelRows.contains { $0.bundleId == "com.google.Chrome" } }
     let chromeRows = SwitcherSession.shared.panelRows.filter { $0.bundleId == "com.google.Chrome" }
     if !chromeRows.isEmpty { failures.append("workspace exclude leaked \(chromeRows.count) rows") }
     if SwitcherSession.shared.isOpen { SwitcherSession.shared.close(commit: false) }
@@ -587,7 +723,7 @@ func runExtrasDemo() {
     // Gestures: private MultitouchSupport stack installs on the attached devices.
     let devices = GestureSwitch.shared.start()
     GestureSwitch.shared.handler = {}
-    print("extras: devices=\(devices) search \(rowBefore)→\(rowAfter)")
+    print("extras: devices=\(devices) search \(rowBefore.count)→\(rowAfter.count) rows")
 
     print(failures.isEmpty ? "PASS" : "FAIL: \(failures.joined(separator: "; "))")
     exit(failures.isEmpty ? 0 : 1)
@@ -715,8 +851,9 @@ case "track":    runTrackDemo()
 case "prefs":    runPrefsDemo()
 case "prefs-ui": runPrefsUIDemo()
 case "extras":   runExtrasDemo()
+case "spec":     runSpecDemo()
 case "run":      runAgent()
 default:
-    print("usage: AltTabCore [enum|activate|hotkey|panel|track|prefs|extras|run]")
+    print("usage: AltTabCore [enum|activate|hotkey|panel|track|prefs|extras|spec|run]")
     exit(2)
 }

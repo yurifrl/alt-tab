@@ -95,6 +95,17 @@ final class WindowTracker {
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
         log("ws:activated pid=\(app.processIdentifier) \(app.localizedName ?? "?")")
         refresh(reason: "activate")
+        // Activation can land before the app settles its focused window —
+        // e.g. a browser activated by a URL open from another app reports
+        // stale/nil AX focus, and no AX focus-change follows because the
+        // in-app focused window never changed. Re-read focus once settled.
+        let pid = app.processIdentifier
+        for delay in [0.3, 1.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return }
+                self?.refresh(reason: "activate+settle")
+            }
+        }
     }
 
     @objc private func appTerminated(_ note: Notification) {
@@ -132,6 +143,8 @@ final class WindowTracker {
         // App-level: focused/main window swaps drive refresh.
         AXObserverAddNotification(obs, appElement, kAXFocusedWindowChangedNotification as CFString, ctx)
         AXObserverAddNotification(obs, appElement, kAXMainWindowChangedNotification as CFString, ctx)
+        // New windows: refresh, and get the window-level observers below.
+        AXObserverAddNotification(obs, appElement, kAXWindowCreatedNotification as CFString, ctx)
         // Window-level: title/minimize/destroy on current windows (best effort).
         if let windowsVal = axCopy(appElement, kAXWindowsAttribute),
            CFGetTypeID(windowsVal) == CFArrayGetTypeID() {
@@ -141,9 +154,7 @@ final class WindowTracker {
             for i in 0..<CFArrayGetCount(cfArr) {
                 let w = Unmanaged<AXUIElement>.fromOpaque(CFArrayGetValueAtIndex(cfArr, i))
                     .retain().takeRetainedValue()
-                AXObserverAddNotification(obs, w, kAXTitleChangedNotification as CFString, ctx)
-                AXObserverAddNotification(obs, w, kAXWindowMiniaturizedNotification as CFString, ctx)
-                AXObserverAddNotification(obs, w, kAXUIElementDestroyedNotification as CFString, ctx)
+                observeWindow(w, obs)
                 kept.append(w)
             }
             observedWindows[pid] = kept
@@ -152,6 +163,23 @@ final class WindowTracker {
         let src = AXObserverGetRunLoopSource(obs)
         CFRunLoopAddSource(CFRunLoopGetMain(), src, .defaultMode)
         observers[pid] = (obs, src)
+    }
+
+    private func observeWindow(_ w: AXUIElement, _ obs: AXObserver) {
+        let ctx = Unmanaged.passUnretained(self).toOpaque()
+        AXObserverAddNotification(obs, w, kAXTitleChangedNotification as CFString, ctx)
+        AXObserverAddNotification(obs, w, kAXWindowMiniaturizedNotification as CFString, ctx)
+        AXObserverAddNotification(obs, w, kAXUIElementDestroyedNotification as CFString, ctx)
+    }
+
+    /// Main thread. Windows created after attach get the same per-window
+    /// observers as the initial set.
+    fileprivate func windowCreated(_ w: AXUIElement) {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(w, &pid) == .success,
+              let (obs, _) = observers[pid] else { return }
+        observeWindow(w, obs)
+        observedWindows[pid, default: []].append(w)
     }
 
     private func detachObserver(pid: pid_t) {
@@ -264,7 +292,9 @@ private func axObserverCallback(
 ) {
     guard let refcon else { return }
     let tracker = Unmanaged<WindowTracker>.fromOpaque(refcon).takeUnretainedValue()
+    let name = notification as String
     DispatchQueue.main.async {
-        tracker.refresh(reason: "ax:\(notification as String)")
+        if name == kAXWindowCreatedNotification { tracker.windowCreated(element) }
+        tracker.refresh(reason: "ax:\(name)")
     }
 }

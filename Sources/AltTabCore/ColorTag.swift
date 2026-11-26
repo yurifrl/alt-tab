@@ -15,6 +15,13 @@ enum ColorTag {
                        green: CGFloat((v >> 8) & 0xFF) / 255,
                        blue: CGFloat(v & 0xFF) / 255, alpha: 1)
     }
+
+    /// "#RRGGBB" for a color from the system selector (sRGB, clamped).
+    static func hex(_ color: NSColor) -> String? {
+        guard let c = color.usingColorSpace(.sRGB) else { return nil }
+        func byte(_ v: CGFloat) -> Int { Int((min(max(v, 0), 1) * 255).rounded()) }
+        return String(format: "#%02x%02x%02x", byte(c.redComponent), byte(c.greenComponent), byte(c.blueComponent))
+    }
 }
 
 /// Row of color dots: "none" + palette. Purely visual; the session routes keys.

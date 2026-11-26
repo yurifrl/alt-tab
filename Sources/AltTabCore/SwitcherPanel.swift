@@ -50,6 +50,12 @@ enum SearchText {
 
 }
 
+extension String {
+    /// The row's select letter: the first letter of the displayed name
+    /// (lowercased). Nil for names without letters — no select letter.
+    var quickGoLetter: Character? { lowercased().first { $0.isLetter } }
+}
+
 /// One row, Command-Tab cell style: hint gutter | right-aligned app
 /// name | icon | window title. Matched query characters render in orange.
 final class PanelRowView: NSView {
@@ -200,7 +206,7 @@ final class PanelRowView: NSView {
         editing = true
         editAllSelected = ed.allSelected
         appNameText = ed.display
-        hintLetter = ed.text.lowercased().first { $0.isLetter }.map { String($0) } ?? baseHintLetter
+        hintLetter = ed.text.quickGoLetter.map { String($0) } ?? baseHintLetter
         applyIndicator()
         setHighlighted(isSelected)
     }
@@ -210,7 +216,7 @@ final class PanelRowView: NSView {
         editing = false
         if let name {
             appNameText = name
-            hintLetter = name.lowercased().first { $0.isLetter }.map { String($0) } ?? baseHintLetter
+            hintLetter = name.quickGoLetter.map { String($0) } ?? baseHintLetter
             baseHintLetter = hintLetter
         } else {
             hintLetter = baseHintLetter
@@ -471,21 +477,40 @@ final class SwitcherPanelController {
     private var index: [(panel: Int, row: Int)] = []
     private(set) var rows: [WindowModel] = []
     private(set) var selection = 0
-    /// Quick-go letter per global row index (unique across the list).
-    private var hintByIndex: [Character?] = []
-
-    /// Global index of the row whose quick-go letter is `ch`.
-    func indexForHint(_ ch: Character) -> Int? {
-        hintByIndex.firstIndex { $0 == ch }
+    /// Select letter per row — the letter its icon draws: the first letter of
+    /// the displayed name (alias wins). Several rows may share one.
+    static func assignHints(_ models: [WindowModel]) -> [Character?] {
+        models.map(\.displayName.quickGoLetter)
     }
 
-    /// Unique letter per row: first letter of the displayed name (alias wins), then any
-    /// free letter of the title, then any free letter at all.
-    static func assignHints(_ models: [WindowModel]) -> [Character?] {
-        models.map { $0.displayName.lowercased().first { $0.isLetter } }
+    /// Pure select-letter walk decision (SL-2/SL-9/SL-10): index of the first
+    /// carrier strictly below `selection`, nil when fewer than two rows carry
+    /// the pressed letter (SL-9) or none sits below (SL-2b) — the letter then
+    /// types again (SL-3) instead of wrapping around (SL-10).
+    static func selectLetterStep(letters: [Character?], selection: Int,
+                                 pressed: Character) -> Int? {
+        let carriers = letters.indices.filter { letters[$0] == pressed }
+        guard carriers.count > 1 else { return nil }   // SL-2(a) · SL-9
+        return carriers.first { $0 > selection }       // SL-2(b) · SL-10 — forward only, never wrapping
+    }
+
+    /// Row the select-letter walk steps to for a repeat press of `ch` — nil
+    /// when the repeat must fall back to typing (SL-3). Thin live wrapper over
+    /// the pure decision, so a real press and the spec differential (V2a)
+    /// judge the same function.
+    func nextIndexForHint(_ ch: Character) -> Int? {
+        SwitcherPanelController.selectLetterStep(letters: rows.map { $0.displayName.quickGoLetter },
+                                                 selection: selection, pressed: ch)
     }
 
     var onCommit: ((WindowModel) -> Void)?
+
+    /// Fired when the selection really moves between letter presses (SL-5):
+    /// arrows, digits, hover/scroll and trigger cycling all funnel through
+    /// `setSelection`, so the session hears any of them here and ends the
+    /// select-letter sequence. The walk's own step (SL-4) and panel
+    /// re-renders (SL-8) pass `endsWalk: false` and stay silent.
+    var onSelectionMoved: (() -> Void)?
 
     static let rowHeight: CGFloat = 30
     static let rowSpacing: CGFloat = 4
@@ -563,7 +588,6 @@ final class SwitcherPanelController {
             assigned[sIdx].append(wm)
         }
         let hints = Self.assignHints(assigned.flatMap { $0 })
-        hintByIndex = hints
         screenPanels = zip(screens, assigned).map { ScreenPanel(screenFrame: $0.0.visibleFrame) }
         for (pi, sp) in screenPanels.enumerated() {
             sp.hoverCallback = { [weak self] idx in self?.hoverSelect(idx) }
@@ -659,10 +683,17 @@ final class SwitcherPanelController {
         return screenPanels[index[globalIdx].panel].rows[index[globalIdx].row]
     }
 
-    func setSelection(_ globalIdx: Int) {
+    /// Moves the selection. `endsWalk` marks the move as a between-presses
+    /// action (SL-5) — only then, and only when the value actually changed,
+    /// does `onSelectionMoved` fire. The walk's own step (SL-4) and a
+    /// re-render's pin (SL-8: the re-rank is part of the press that caused
+    /// it) pass false.
+    func setSelection(_ globalIdx: Int, endsWalk: Bool = true) {
         guard index.indices.contains(globalIdx) else { return }
+        let moved = selection != globalIdx
         selection = globalIdx
         applyHighlight()
+        if moved, endsWalk { onSelectionMoved?() }
         if let wm = selectedModel {
             print("panel: selection=\(selection) [\(wm.appLocalName)] \"\(wm.title)\"")
         }
@@ -687,6 +718,10 @@ final class SwitcherSession {
     private let panel = SwitcherPanelController()
     private(set) var isOpen = false
     private var searchQuery = ""
+    /// Last select letter typed (SL-1/SL-6): pressing it again is a repeat
+    /// press — a walk step (SL-2) or, when no step remains, another type
+    /// (SL-3). Any other panel action in between ends the sequence (SL-5).
+    private var lastSelectLetter: Character?
     /// Remembered queries (Search Shortcuts), newest first, capped by depth.
     private var searchMemory: [String] = []
     /// query → window last committed for it (pid + title).
@@ -758,6 +793,11 @@ final class SwitcherSession {
             // re-entry happens on that path.
             if let self, self.isOpen { self.close(commit: false) }
         }
+        panel.onSelectionMoved = { [weak self] in
+            // SL-5: a selection move between letter presses (arrows, digits,
+            // hover, scroll, trigger cycling) ends the walk sequence.
+            self?.lastSelectLetter = nil
+        }
         HotkeyCenter.shared.interceptor = { [weak self] event in
             guard let self, self.isOpen else { return false }
             return self.routeKey(event)
@@ -826,6 +866,7 @@ final class SwitcherSession {
         // commitAsync guards). Show the tracker's current model now; refresh
         // and re-render on the next main-loop turn.
         searchQuery = ""
+        lastSelectLetter = nil   // SL-5: a panel open ends any walk sequence
         let showed = renderFromTracker(selectFirst: true)
         // Current window ignored → it sits below the rotation, so row 0 is
         // already the previously used window; don't step past it.
@@ -915,10 +956,86 @@ final class SwitcherSession {
 
     // Verification hooks (Phase 6 demos): query/rows surface without synthetic CGEvents.
     var panelRows: [WindowModel] { panel.rows }
+    var panelSelection: Int { panel.selection }
+    var panelQuery: String { searchQuery }
     func openForTest() { open() }
     func typeForTest(_ s: String) {
         searchQuery += s
         applyQuery()
+    }
+    /// Production select-letter path: types, or walks a repeated letter
+    /// (SL-1..SL-3).
+    func pressForTest(_ ch: Character) { letterKeyDown(String(ch), autoRepeat: false) }
+    /// A key-down carrying the auto-repeat flag (SL-7).
+    func autoRepeatForTest(_ ch: Character) { letterKeyDown(String(ch), autoRepeat: true) }
+    /// Space through the production gate: only a non-empty query types it (§4).
+    @discardableResult
+    func spaceForTest() -> Bool {
+        guard !searchQuery.isEmpty else { return false }
+        letterKeyDown(" ", autoRepeat: false)
+        return true
+    }
+    /// Backspace through the production branch (SL-5/§4).
+    @discardableResult
+    func backspaceForTest() -> Bool { deleteQueryChar() }
+    /// An arrow / move-up / scroll step (SL-5); wraps like the real gutter.
+    func moveSelectionForTest(_ delta: Int) { panel.moveSelection(delta) }
+    /// Raw key / key-up events through the production router (SL-5/SL-11,
+    /// FLAG-2 taps). A nil event is a harness-side event that could not be
+    /// built: treated as unhandled so the checks report it.
+    func routeKeyEventForTest(_ event: CGEvent?) -> Bool { event.map { routeKey($0) } ?? false }
+    func routeKeyUpEventForTest(_ event: CGEvent?) -> Bool { event.map { routeKeyUp($0) } ?? false }
+    /// Last select letter — nil once a panel action ended the sequence (SL-5).
+    var panelLastSelectLetter: Character? { lastSelectLetter }
+    /// Whether a hold-key action left the rename editor open (SL-5/FLAG-2).
+    var renameOpenForTest: Bool { renameEditor != nil }
+
+    /// Spec harness row source (spec 001 §5): while set, every
+    /// re-render shows these rows (ranked with `specRank`) instead of the
+    /// tracker's, so the walk runs on row sets the live screen cannot produce
+    /// (crafted letters, actions with no window effect). Never set outside the
+    /// spec mode.
+    private var specRows: [WindowModel]?
+
+    /// Spec harness open (spec 001 §5): the synchronous half of
+    /// `open()` — query and sequence cleared (SL-5), rows rendered, selection
+    /// reset to the top. No deferred tracker refresh: synthetic rows never
+    /// need one.
+    func specOpen(_ models: [WindowModel]) {
+        specRows = models
+        openTask?.cancel()
+        openTask = nil
+        searchQuery = ""
+        lastSelectLetter = nil   // SL-5: a panel open ends any walk sequence
+        _ = renderFromTracker(selectFirst: true)
+    }
+
+    /// Spec harness refresh (SL-8): new rows land under the open panel,
+    /// selection pinned to the same row, sequence untouched.
+    func specSetRows(_ models: [WindowModel]) {
+        specRows = models
+        refreshRowsIfOpen()
+    }
+
+    /// Spec harness close: ends the sequence (SL-5) and drops the row source.
+    func specClose() {
+        close(commit: false)
+        specRows = nil
+    }
+
+    /// Spec harness search stand-in (spec 001 §5): the ranking
+    /// `trackerRows` applies to synthetic rows — same score inputs and stable
+    /// order, minus the pieces a synthetic row set cannot have (Space scope,
+    /// ignored partition, "Last Selected" memory). Never used outside the
+    /// harness.
+    static func specRank(_ rows: [WindowModel], query: String) -> [WindowModel] {
+        guard !query.isEmpty else { return rows }
+        let q = query
+        var ranked = rows.enumerated().map { (i: $0.offset, wm: $0.element,
+            sc: max(SearchText.score(app: $0.element.displayName, title: $0.element.title, query: q),
+                SearchText.score(app: $0.element.appLocalName, title: "", query: q))) }
+        ranked.sort { $0.sc != $1.sc ? $0.sc > $1.sc : $0.i < $1.i }
+        return ranked.map(\.wm)
     }
 
     /// Current tracker model after all Rules/Search filters, focused app first.
@@ -971,7 +1088,10 @@ final class SwitcherSession {
     /// the tracker already refreshed; re-refreshing here recurses infinitely).
     @discardableResult
     private func renderFromTracker(selectFirst: Bool) -> Bool {
-        let rows = trackerRows()
+        // Spec harness (spec 001 §5): synthetic rows replace the
+        // tracker's and rank through the harness's search stand-in
+        // (`specRank`); the production tracker path is untouched.
+        let rows = specRows.map { Self.specRank($0, query: searchQuery) } ?? trackerRows()
         // Search left zero matches: keep the panel open showing only the
         // search section instead of tearing it down.
         if rows.isEmpty, !searchQuery.isEmpty {
@@ -990,7 +1110,10 @@ final class SwitcherSession {
             headers[firstIgnored] = "Ignored"
         }
         panel.show(rows, query: searchQuery, headers: headers)
-        if selectFirst { panel.setSelection(0) }
+        // The re-rank reset-to-top is part of the press (or open/refresh) that
+        // caused it — not a between-presses action, so it never ends the walk
+        // (SL-1/SL-3/SL-7/SL-8).
+        if selectFirst { panel.setSelection(0, endsWalk: false) }
         if renameEditor != nil { applyRenameUI() }
         return true
     }
@@ -1045,7 +1168,9 @@ final class SwitcherSession {
         renderFromTracker(selectFirst: false)
         if let pinned,
            let idx = panel.rows.firstIndex(where: { $0.pid == pinned.pid && $0.title == pinned.title }) {
-            panel.setSelection(idx)
+            // SL-8: a refresh landing between presses is input to the next
+            // press, not an action — the pin must not end the sequence.
+            panel.setSelection(idx, endsWalk: false)
         }
         print("panel: refreshed rows=\(panel.rows.count) selection=\(panel.selection)")
     }
@@ -1085,6 +1210,7 @@ final class SwitcherSession {
         holdSideBits = nil
         activeTrigger = nil
         searchQuery = ""
+        lastSelectLetter = nil   // SL-5: a panel close ends any walk sequence
         print("panel: closed(\(commit ? "commit" : "cancel"))")
         if commit, let target {
             commitAsync(target)
@@ -1167,9 +1293,7 @@ final class SwitcherSession {
         case UInt32(kVK_Escape), UInt32(kVK_LeftArrow):
             close(commit: false)
         case UInt32(kVK_Delete):
-            guard searchQuery.isEmpty == false else { return false }
-            searchQuery.removeLast()
-            applyQuery()
+            return deleteQueryChar()
         default:
             if let idx = Self.digitKeycodes[kc] {
                 // Digit N selects row N (the "Numbers 1–9" gutter).
@@ -1182,6 +1306,8 @@ final class SwitcherSession {
                     guard let self, self.isOpen, self.vHold != nil else { return }
                     self.vHold = nil
                     self.vHoldFired = true
+                    // SL-5: a hold-key action firing ends any walk sequence.
+                    self.lastSelectLetter = nil
                     PrefsStore.sessionShowIgnored = !PrefsStore.showIgnoredNow
                     print("panel: show ignored (session) = \(PrefsStore.showIgnoredNow)")
                     WindowTracker.shared.refresh(reason: "session-show-ignored")
@@ -1242,9 +1368,11 @@ final class SwitcherSession {
             } else if let ch = Self.letterKeycodes[kc].map({ String($0) }) ?? (kc == 49 && !searchQuery.isEmpty ? " " : nil),
                       PrefsStore.typingStartsFastSearch,
                       Self.searchEligibleFlags(event.flags) {
-                // Every letter types into the search; commit is Enter / release.
-                searchQuery.append(ch)
-                applyQuery()
+                // SL-11: only an eligible key reaches here — this gate is the
+                // walk's whole habitat. It types (SL-1) or, on a repeat press,
+                // walks (SL-2); the auto-repeat flag rides along so a held
+                // key types instead of walking (SL-7).
+                letterKeyDown(ch, autoRepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0)
             } else {
                 return false
             }
@@ -1292,14 +1420,17 @@ final class SwitcherSession {
         eHold?.cancel()
         eHold = nil
         guard isOpen else { return }
-        searchQuery.append("e")
-        applyQuery()
+        // FLAG-2 (spec 001): the released tap is a letter press
+        // like any other — it walks (SL-1/SL-2/SL-6) instead of bypassing
+        // the sequence.
+        letterKeyDown("e", autoRepeat: false)
     }
 
     // MARK: Hold-E rename (alias for the app-name column)
 
     private func beginRenameSelected() {
         guard let target = panel.selectedModel, !target.bundleId.isEmpty else { return }
+        lastSelectLetter = nil   // SL-5: rename opening ends the walk
         renameEditor = RenameEditor(target.alias ?? target.appLocalName)
         renameColor = target.colorHex ?? ""
         renameColorFocus = false
@@ -1455,24 +1586,21 @@ final class SwitcherSession {
         vHold?.cancel()
         vHold = nil
         guard isOpen else { return }
-        searchQuery.append("v")
-        applyQuery()
+        letterKeyDown("v", autoRepeat: false)   // FLAG-2: through the letter path (SL-1/SL-2)
     }
 
     private func flushPendingH() {
         hHold?.cancel()
         hHold = nil
         guard isOpen else { return }
-        searchQuery.append("h")
-        applyQuery()
+        letterKeyDown("h", autoRepeat: false)   // FLAG-2: through the letter path (SL-1/SL-2)
     }
 
     private func flushPendingI() {
         iHold?.cancel()
         iHold = nil
         guard isOpen else { return }
-        searchQuery.append("i")
-        applyQuery()
+        letterKeyDown("i", autoRepeat: false)   // FLAG-2: through the letter path (SL-1/SL-2)
     }
 
     /// Adds the selected window to Rules → Apps to not show (exact title under
@@ -1480,17 +1608,18 @@ final class SwitcherSession {
     private func toggleIgnoreSelected() {
         guard let target = panel.selectedModel,
               PrefsStore.toggleIgnore(target) else { return }
+        lastSelectLetter = nil   // SL-5: the ignore toggle is a panel action
         print("panel: ignore toggled → [\(target.appLocalName)] \"\(target.title)\"")
         WindowTracker.shared.refresh(reason: "ignore")
     }
 
-    /// Resolve a pending Q press as a tap: cancel the hold timer, type "q".
+    /// Resolve a pending Q press as a tap: cancel the hold timer, then type
+    /// "q" through the letter path (FLAG-2: taps walk like every letter).
     private func flushPendingQ() {
         qHold?.cancel()
         qHold = nil
         guard isOpen else { return }
-        searchQuery.append("q")
-        applyQuery()
+        letterKeyDown("q", autoRepeat: false)
     }
 
     /// Matches one in-panel action: modifiers exactly equal the configured
@@ -1527,6 +1656,7 @@ final class SwitcherSession {
         case .minimize:   minimizeWindow(target)
         case .hide:       hideApp(target)
         }
+        lastSelectLetter = nil   // SL-5: a hold-key window action ends the walk
         print("panel: action \(action) → [\(target.appLocalName)] \"\(target.title)\"")
         // Re-render after the effect lands (row usually disappears).
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
@@ -1539,6 +1669,49 @@ final class SwitcherSession {
     private func applyQuery() {
         renderFromTracker(selectFirst: true)
         print("panel: query=\"\(searchQuery)\" rows=\(panel.rows.count)")
+    }
+
+    /// Every letter press in the panel — typed key, held-key tap, spec harness
+    /// — lands here. A repeat press (SL-5/SL-6: the previous panel event was a
+    /// press of the same letter) steps when a carrier sits strictly below
+    /// (SL-2/SL-4); otherwise the press is the normal path: type, re-rank,
+    /// select the top (SL-1/SL-3).
+    private func letterKeyDown(_ ch: String, autoRepeat: Bool) {
+        let letter = ch.count == 1 ? ch.first.flatMap { $0.isLetter ? $0 : nil } : nil
+        // SL-1/SL-3: the normal path — a first press (nothing repeated), a
+        // repeat press with no step left, and any press that is not a letter.
+        // SL-6: the sequence's letter is the last press, step or type alike.
+        if !autoRepeat, let letter, letter == lastSelectLetter, cycleToNextRow(letter) { return }
+        // SL-7: a held key (auto-repeat) types and leaves the sequence exactly
+        // as it found it. Space carries no letter and ends the sequence
+        // (SL-5, "typing a space"); a repeat press that could not step keeps
+        // the sequence (including when the letter's row left the model, SL-10).
+        if !autoRepeat { lastSelectLetter = letter }
+        searchQuery.append(ch)
+        applyQuery()
+    }
+
+    /// SL-2/SL-9/SL-10: steps to the first carrier strictly below the current
+    /// selection — false when the rows hold fewer than two carriers or none
+    /// sits below (the press then types, SL-3). Never wraps (SL-10). SL-12b:
+    /// a step moves the selection only — query, order and windows untouched.
+    private func cycleToNextRow(_ letter: Character) -> Bool {
+        guard let next = panel.nextIndexForHint(letter) else { return false }
+        panel.setSelection(next, endsWalk: false)   // SL-4: the step ends nothing
+        print("panel: select letter \"\(letter)\" → row \(next + 1)/\(panel.rows.count)")
+        return true
+    }
+
+    /// Backspace through the query (SL-5/§4): deletion with a non-empty query
+    /// is a panel action, so it ends the sequence; with an empty query the key
+    /// is swallowed and nothing changes. Returns whether something was deleted.
+    @discardableResult
+    private func deleteQueryChar() -> Bool {
+        guard !searchQuery.isEmpty else { return false }
+        searchQuery.removeLast()
+        lastSelectLetter = nil   // SL-5: deletion is a panel action
+        applyQuery()
+        return true
     }
 
     /// Typed character for a key event (CGEventKeyboardGetUnicodeString).
