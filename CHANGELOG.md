@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shortcut labels.
 - Switcher rows show each app's icon in the identity slot again, with the select
   letter confined to the left hint gutter instead of replacing the icon.
+- Nightly builds only run when code changed: the nightly workflow diffs `main`
+  against the last successful nightly and skips changelog-, docs- and
+  planning-only commits. Manual dispatch, a first-ever nightly, and force
+  pushes still build; stable releases were already gated on `VERSION` bumps.
 
 ## [0.2.2] - 2026-11-26
 
