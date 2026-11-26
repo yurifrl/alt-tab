@@ -120,9 +120,16 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
 
         // General pane -------------------------------------------------------
         loginCheck.target = self; loginCheck.action = #selector(loginToggled(_:))
+        updatePopup.addItems(withTitles: ["Stable", "Nightly"])
+        updatePopup.target = self; updatePopup.action = #selector(updateChannelChanged(_:))
+        checkUpdatesButton.target = self; checkUpdatesButton.action = #selector(checkForUpdatesClicked(_:))
+        checkUpdatesButton.isEnabled = Updater.shared.isAvailable
         let generalGrid = NSGridView(views: [
             [NSGridCell.emptyContentView, loginCheck],
             [NSGridCell.emptyContentView, loginHelp],
+            [NSGridCell.emptyContentView, updatePopup],
+            [NSGridCell.emptyContentView, updateHelp],
+            [NSGridCell.emptyContentView, checkUpdatesButton],
         ])
 
         // Command-Tab pane -------------------------------------------------
@@ -301,6 +308,12 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
         ])
     }
 
+    /// Update-channel selector — read live by Updater on each manual check.
+    private let updatePopup = NSPopUpButton(frame: .zero)
+    private let updateHelp = NSTextField(wrappingLabelWithString: "Nightly tracks builds from main (rebuilt daily). Applies to the next manual check; numbered releases are always offered.")
+    /// Manual check, same code path as the status-menu item.
+    private let checkUpdatesButton = NSButton(title: "Check for Updates…", target: nil, action: nil)
+
     private func tab(_ name: String, _ grid: NSGridView, height: CGFloat = 330) -> NSTabViewItem {
         let item = NSTabViewItem(identifier: name)
         item.label = name
@@ -319,6 +332,7 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
     private func label(_ text: String) -> NSTextField { NSTextField(labelWithString: text) }
 
     private func syncFromStore() {
+        updatePopup.selectItem(at: PrefsStore.UpdateChannel.allCases.firstIndex(of: PrefsStore.updateChannel) ?? 0)
         themePopup.selectItem(at: PrefsStore.Theme.allCases.firstIndex(of: PrefsStore.theme) ?? 0)
         rowsField.integerValue = PrefsStore.maxRows
         rowsStepper.integerValue = PrefsStore.maxRows
@@ -386,6 +400,14 @@ final class PrefsWindowController: NSWindowController, NSWindowDelegate, NSTable
     }
 
     // MARK: - Actions (each writes the store, then applies live)
+
+    @objc private func updateChannelChanged(_ sender: NSPopUpButton) {
+        PrefsStore.updateChannel = PrefsStore.UpdateChannel.allCases[sender.indexOfSelectedItem]
+    }
+
+    @objc private func checkForUpdatesClicked(_ sender: NSButton) {
+        Updater.shared.checkForUpdates()
+    }
 
     @objc private func themeChanged(_ sender: NSPopUpButton) {
         PrefsStore.theme = PrefsStore.Theme.allCases[sender.indexOfSelectedItem]

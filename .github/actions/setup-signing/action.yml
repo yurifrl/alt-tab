@@ -1,0 +1,82 @@
+name: Set up signing and notarization
+description: >-
+  Gate on the signing configuration, import the Developer ID certificate into a
+  temporary keychain and stage the App Store Connect API key. Exports
+  KEYCHAIN_PATH, ASC_P8_PATH, ASC_KEY_ID and ASC_ISSUER_ID for later shell
+  steps, and returns the paths as outputs for later composite inputs.
+
+inputs:
+  signing-identity:
+    description: Developer ID Application identity (certificate common name).
+    required: true
+  p12-base64:
+    description: Base64-encoded Developer ID certificate (.p12).
+    required: true
+  p12-password:
+    description: Password of the .p12.
+    required: true
+  asc-key-p8-base64:
+    description: Base64-encoded App Store Connect API key (.p8).
+    required: true
+  asc-key-id:
+    description: App Store Connect API key ID.
+    required: true
+  asc-issuer-id:
+    description: App Store Connect API issuer ID.
+    required: true
+
+outputs:
+  keychain-path:
+    description: Temporary keychain holding the signing identity.
+    value: ${{ steps.import.outputs.keychain-path }}
+  asc-key-path:
+    description: App Store Connect API key staged for notarytool.
+    value: ${{ steps.import.outputs.asc-key-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Gate and import
+      id: import
+      shell: bash
+      env:
+        SIGNING_IDENTITY: ${{ inputs.signing-identity }}
+        P12_B64: ${{ inputs.p12-base64 }}
+        P12_PASSWORD: ${{ inputs.p12-password }}
+        ASC_P8_B64: ${{ inputs.asc-key-p8-base64 }}
+        ASC_KEY_ID_IN: ${{ inputs.asc-key-id }}
+        ASC_ISSUER_ID_IN: ${{ inputs.asc-issuer-id }}
+      run: |
+        set -euo pipefail
+        : "${SIGNING_IDENTITY:?repo variable DEVELOPER_ID_APPLICATION is required}"
+        : "${P12_B64:?secret MACOS_SIGNING_P12_BASE64 is required}"
+        : "${P12_PASSWORD:?secret MACOS_SIGNING_P12_PASSWORD is required}"
+        : "${ASC_P8_B64:?secret ASC_API_KEY_P8_BASE64 is required}"
+        : "${ASC_KEY_ID_IN:?secret ASC_KEY_ID is required}"
+        : "${ASC_ISSUER_ID_IN:?secret ASC_ISSUER_ID is required}"
+        P12_PATH="$RUNNER_TEMP/signing.p12"
+        KEYCHAIN_PATH="$RUNNER_TEMP/release.keychain-db"
+        printf '%s' "$P12_B64" | base64 --decode > "$P12_PATH"
+        security create-keychain -p "$P12_PASSWORD" "$KEYCHAIN_PATH"
+        security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+        security unlock-keychain -p "$P12_PASSWORD" "$KEYCHAIN_PATH"
+        security import "$P12_PATH" -P "$P12_PASSWORD" -t agg -k "$KEYCHAIN_PATH" \
+          -T /usr/bin/codesign
+        security set-key-partition-list -S apple-tool:,apple:,codesign: \
+          -k "$P12_PASSWORD" "$KEYCHAIN_PATH"
+        security list-keychain -d user -s "$KEYCHAIN_PATH"
+        rm "$P12_PATH"
+        ASC_P8_PATH="$RUNNER_TEMP/asc-api-key.p8"
+        printf '%s' "$ASC_P8_B64" | base64 --decode > "$ASC_P8_PATH"
+        {
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH"
+          echo "ASC_P8_PATH=$ASC_P8_PATH"
+          echo "ASC_KEY_ID=$ASC_KEY_ID_IN"
+          echo "ASC_ISSUER_ID=$ASC_ISSUER_ID_IN"
+          echo "keychain-path=$KEYCHAIN_PATH"
+          echo "asc-key-path=$ASC_P8_PATH"
+        } >> "$GITHUB_OUTPUT"
+        {
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH"
+          echo "ASC_P8_PATH=$ASC_P8_PATH"
+        } >> "$GITHUB_ENV"

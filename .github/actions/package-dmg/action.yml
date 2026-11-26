@@ -1,0 +1,88 @@
+name: Package, sign and notarize the DMG
+description: >-
+  Wrap the signed app (plus an /Applications symlink) into a DMG in the
+  workspace root, sign it, notarize and staple it, and report its SHA-256.
+
+inputs:
+  app-path:
+    description: Path of the signed, stapled .app bundle.
+    required: true
+  dmg-name:
+    description: File name of the DMG in the workspace root (e.g. AltTab.dmg).
+    required: true
+  volname:
+    description: Volume name shown when the DMG is mounted.
+    required: true
+  signing-identity:
+    description: Developer ID Application identity.
+    required: true
+  keychain-path:
+    description: Keychain holding the signing identity.
+    required: true
+  asc-key-path:
+    description: App Store Connect API key (.p8) for notarytool.
+    required: true
+  asc-key-id:
+    description: App Store Connect API key ID.
+    required: true
+  asc-issuer-id:
+    description: App Store Connect API issuer ID.
+    required: true
+
+outputs:
+  dmg-path:
+    description: Path of the signed, stapled DMG.
+    value: ${{ steps.package.outputs.dmg-path }}
+  sha256:
+    description: SHA-256 of the DMG.
+    value: ${{ steps.package.outputs.sha256 }}
+
+runs:
+  using: composite
+  steps:
+    - name: Create, sign and notarize
+      id: package
+      shell: bash
+      env:
+        APP: ${{ inputs.app-path }}
+        DMG: ${{ inputs.dmg-name }}
+        VOLNAME: ${{ inputs.volname }}
+        IDENTITY: ${{ inputs.signing-identity }}
+        KEYCHAIN_PATH: ${{ inputs.keychain-path }}
+        ASC_P8_PATH: ${{ inputs.asc-key-path }}
+        ASC_KEY_ID: ${{ inputs.asc-key-id }}
+        ASC_ISSUER_ID: ${{ inputs.asc-issuer-id }}
+      run: |
+        set -euo pipefail
+        PAYLOAD="$RUNNER_TEMP/dmg-payload"
+        rm -rf "$PAYLOAD"
+        mkdir -p "$PAYLOAD"
+        ditto "$APP" "$PAYLOAD/AltTab.app"
+        ln -s /Applications "$PAYLOAD/Applications"
+        rm -f "$DMG"
+        hdiutil create -volname "$VOLNAME" -srcfolder "$PAYLOAD" -ov -format UDZO "$DMG"
+        codesign --force --timestamp --keychain "$KEYCHAIN_PATH" --sign "$IDENTITY" "$DMG"
+        LOG="$RUNNER_TEMP/notary-dmg.log"
+        set +e
+        xcrun notarytool submit "$DMG" \
+          --key "$ASC_P8_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" --wait 2>&1 | tee "$LOG"
+        rc=${PIPESTATUS[0]}
+        set -e
+        if [[ $rc -ne 0 ]] || grep -qi 'status:[[:space:]]*Invalid' "$LOG"; then
+          SUB_ID="$(grep -Eo '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "$LOG" | head -1 || true)"
+          [[ -z "$SUB_ID" ]] || xcrun notarytool log "$SUB_ID" \
+            --key "$ASC_P8_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" || true
+          exit 1
+        fi
+        for attempt in 1 2 3; do
+          xcrun stapler staple "$DMG" && break
+          [[ $attempt -lt 3 ]] || exit 1
+          sleep $((attempt * 15))
+        done
+        xcrun stapler validate "$DMG"
+        SHA="$(shasum -a 256 "$DMG" | awk '{print $1}')"
+        echo "$SHA  $DMG"
+        {
+          echo "dmg-path=$DMG"
+          echo "sha256=$SHA"
+        } >> "$GITHUB_OUTPUT"

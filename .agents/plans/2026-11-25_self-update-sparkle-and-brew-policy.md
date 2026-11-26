@@ -295,3 +295,11 @@ Notes only; no code written from these yet.
 - **Notarization of `Autoupdate`** (unproven): the re-sign preserves Sparkle's ad-hoc entitlement (`com.apple.application-identifier = org.sparkle-project.Sparkle.Autoupdate`). Read the `notarytool log` of the first real release; if it objects, re-sign `Autoupdate` with `--preserve-metadata=flags` instead of `entitlements`.
 - **EdDSA key handling** (ruled): piped to `generate_appcast` over stdin (`--ed-key-file -`), never written to disk — verified locally against a `SUPublicEDKey`-declaring build (`sparkle:edSignature` present); the CI step uses the same path.
 - **Dependency pin** (ruled): `Package.resolved` is tracked; the declared `from: "2.10.1"` only bounds resolution, the lockfile is the pin.
+
+### D. Nightly channel — implementation decisions (2026-11-26)
+
+- **Build numbers are UTC timestamps** (`date -u +%Y%m%d%H%M`), not run numbers: nightly and release are separate workflows with separate counters, so run numbers cannot order builds across channels. Verified: `202611290600` outranks stable `5` regardless of which workflow built it.
+- **Nightly assets are `AltTab-nightly.dmg` / `AltTab-nightly.md`**: a same-named archive would collide with the stable item. Verified empirically — `generate_appcast` replaces a same-named item instead of duplicating, and preserves the other channel's item byte-for-byte.
+- **One feed, merge vintage**: the appcast step fetches the live `releases/latest/download/appcast.xml` and merges its item in — from *both* workflows, so a numbered release never drops the nightly item and vice versa. Old clients (no delegate → default channel only) ignore `sparkle:channel`-tagged items entirely; no migration.
+- **Cron + manual dispatch** for nightly (on-push needs a per-release dedup rule; deferred until the cron cadence proves too slow).
+- **Shared step bodies** live in `.github/actions/{setup-signing,build-app,notarize-app,package-dmg,appcast}` — both workflows compose them, with `permissions`, `concurrency`, `timeout-minutes`, typed `workflow_dispatch` inputs and an `if: always()` keychain cleanup.

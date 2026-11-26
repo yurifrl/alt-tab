@@ -1,0 +1,73 @@
+name: Build and sign the app bundle
+description: >-
+  Build the universal binary, assemble AltTab.app (version stamp, embedded
+  Sparkle.framework re-signed inside-out) and sign the bundle with the
+  Developer ID identity.
+
+inputs:
+  version:
+    description: CFBundleShortVersionString to stamp.
+    required: true
+  build-number:
+    description: CFBundleVersion to stamp.
+    required: true
+  signing-identity:
+    description: Developer ID Application identity.
+    required: true
+  keychain-path:
+    description: Keychain holding the signing identity.
+    required: true
+
+outputs:
+  app-path:
+    description: Path of the assembled, signed .app bundle.
+    value: ${{ steps.assemble.outputs.app-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Build universal binary
+      shell: bash
+      run: |
+        set -euo pipefail
+        swift build -c release --arch arm64 --arch x86_64
+        BIN="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/AltTabCore"
+        lipo -info "$BIN"
+        echo "BIN=$BIN" >> "$GITHUB_ENV"
+
+    - name: Assemble and sign AltTab.app
+      id: assemble
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        BUILD_NUMBER: ${{ inputs.build-number }}
+        IDENTITY: ${{ inputs.signing-identity }}
+        KEYCHAIN_PATH: ${{ inputs.keychain-path }}
+      run: |
+        set -euo pipefail
+        APP="build/AltTab.app"
+        mkdir -p "$APP/Contents/MacOS"
+        cp "$BIN" "$APP/Contents/MacOS/AltTab"
+        cp Support/Info.plist "$APP/Contents/Info.plist"
+        mkdir -p "$APP/Contents/Resources"
+        cp Support/AppIcon.icns Support/MenuBarIconTemplate*.png "$APP/Contents/Resources/"
+        /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
+        /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/Info.plist"
+        XC="$(find .build/artifacts -maxdepth 4 -name 'Sparkle.xcframework' -print -quit)"
+        [[ -n "$XC" ]] || { echo "Sparkle.xcframework missing - swift package resolve first" >&2; exit 1; }
+        mkdir -p "$APP/Contents/Frameworks"
+        rm -rf "$APP/Contents/Frameworks/Sparkle.framework"
+        cp -R "$XC/macos-arm64_x86_64/Sparkle.framework" "$APP/Contents/Frameworks/"
+        FW="$APP/Contents/Frameworks/Sparkle.framework"
+        codesign --force --timestamp --options runtime --preserve-metadata=entitlements \
+          --keychain "$KEYCHAIN_PATH" --sign "$IDENTITY" \
+          "$FW/Versions/B/Autoupdate" \
+          "$FW/Versions/B/XPCServices/Downloader.xpc" \
+          "$FW/Versions/B/XPCServices/Installer.xpc" \
+          "$FW/Versions/B/Updater.app" \
+          "$FW"
+        codesign --verify --strict --verbose=2 "$FW"
+        codesign --force --timestamp --options runtime \
+          --keychain "$KEYCHAIN_PATH" --sign "$IDENTITY" "$APP"
+        codesign --verify --deep --strict --verbose=2 "$APP"
+        echo "app-path=$APP" >> "$GITHUB_OUTPUT"

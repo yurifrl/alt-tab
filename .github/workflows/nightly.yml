@@ -1,0 +1,132 @@
+name: Nightly
+
+# Rolling pre-release that tracks main: one fixed `nightly` release, marked
+# pre-release so releases/latest — and the stable feed and casks that resolve
+# through it — keep pointing at the newest numbered release. Rebuilt on a
+# schedule from the tip of main; the step bodies are the same composites the
+# release workflow runs.
+#
+# Feed shape: AltTab-nightly.dmg carries sparkle:channel=nightly, and the
+# appcast step merges that one item into the live feed. Clients that never
+# opted into the channel (including every pre-channel build) ignore tagged
+# items entirely, so no migration is needed.
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A newer run replaces an in-flight nightly.
+  group: nightly
+  cancel-in-progress: true
+
+env:
+  DEVELOPER_ID_APPLICATION: ${{ vars.DEVELOPER_ID_APPLICATION }}
+
+jobs:
+  nightly:
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so release-notes.sh can list commits since the last
+          # numbered tag.
+          fetch-depth: 0
+
+      - name: Set up signing and notarization
+        id: signing
+        uses: ./.github/actions/setup-signing
+        with:
+          signing-identity: ${{ env.DEVELOPER_ID_APPLICATION }}
+          p12-base64: ${{ secrets.MACOS_SIGNING_P12_BASE64 }}
+          p12-password: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
+          asc-key-p8-base64: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
+          asc-key-id: ${{ secrets.ASC_KEY_ID }}
+          asc-issuer-id: ${{ secrets.ASC_ISSUER_ID }}
+
+      - name: Derive version and build number
+        id: meta
+        run: |
+          set -euo pipefail
+          : "${DEVELOPER_ID_APPLICATION:?repo var DEVELOPER_ID_APPLICATION is required}"
+          : "${SPARKLE_ED_PRIVATE_KEY:?secret SPARKLE_ED_PRIVATE_KEY is required - the appcast must be signed}"
+          echo "version=$(<VERSION)-nightly.$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+          # UTC timestamp: orders nightly builds against numbered releases,
+          # whose run-number counters are separate from this workflow's.
+          echo "build=$(date -u +%Y%m%d%H%M)" >> "$GITHUB_OUTPUT"
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+
+      - name: Build and sign AltTab.app
+        id: build
+        uses: ./.github/actions/build-app
+        with:
+          version: ${{ steps.meta.outputs.version }}
+          build-number: ${{ steps.meta.outputs.build }}
+          signing-identity: ${{ env.DEVELOPER_ID_APPLICATION }}
+          keychain-path: ${{ steps.signing.outputs.keychain-path }}
+
+      - name: Notarize and staple the app
+        uses: ./.github/actions/notarize-app
+        with:
+          app-path: ${{ steps.build.outputs.app-path }}
+          asc-key-path: ${{ steps.signing.outputs.asc-key-path }}
+          asc-key-id: ${{ secrets.ASC_KEY_ID }}
+          asc-issuer-id: ${{ secrets.ASC_ISSUER_ID }}
+
+      - name: Package, sign and notarize the DMG
+        id: package
+        uses: ./.github/actions/package-dmg
+        with:
+          app-path: ${{ steps.build.outputs.app-path }}
+          dmg-name: AltTab-nightly.dmg
+          volname: AltTab Nightly
+          signing-identity: ${{ env.DEVELOPER_ID_APPLICATION }}
+          keychain-path: ${{ steps.signing.outputs.keychain-path }}
+          asc-key-path: ${{ steps.signing.outputs.asc-key-path }}
+          asc-key-id: ${{ secrets.ASC_KEY_ID }}
+          asc-issuer-id: ${{ secrets.ASC_ISSUER_ID }}
+
+      - name: Assemble the release notes
+        run: |
+          set -euo pipefail
+          bash scripts/release-notes.sh "${{ steps.meta.outputs.version }}" HEAD RELEASE_NOTES.md
+
+      - name: Generate the signed Sparkle appcast
+        id: appcast
+        uses: ./.github/actions/appcast
+        with:
+          dmg-path: ${{ steps.package.outputs.dmg-path }}
+          notes-name: AltTab-nightly
+          notes-path: RELEASE_NOTES.md
+          download-url-prefix: https://github.com/${{ github.repository }}/releases/download/nightly/
+          channel: nightly
+          sparkle-ed-key: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+
+      - name: Publish the rolling nightly release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPCAST: ${{ steps.appcast.outputs.appcast-path }}
+          DMG: ${{ steps.package.outputs.dmg-path }}
+          TITLE: AltTab Nightly ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view nightly >/dev/null 2>&1; then
+            gh release edit nightly --title "$TITLE" --notes-file RELEASE_NOTES.md
+            gh release upload nightly "$DMG" "$APPCAST" --clobber
+          else
+            # --prerelease keeps releases/latest on numbered releases.
+            gh release create nightly "$DMG" "$APPCAST" --prerelease --title "$TITLE" --notes-file RELEASE_NOTES.md
+          fi
+
+      - name: Remove the temporary keychain
+        if: always()
+        run: |
+          [[ -n "${KEYCHAIN_PATH:-}" ]] || exit 0
+          security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true

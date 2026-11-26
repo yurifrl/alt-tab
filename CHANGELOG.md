@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Nightly update channel: rolling pre-release builds from `main`, opt-in via
+  Preferences → General (Update channel) or the new `yurifrl-alt-tab@nightly`
+  Homebrew cask. Stable remains the default; numbered releases are always
+  offered.
+
 ## [0.2.1] - 2026-11-26
 
 ## [0.2.0] - 2026-11-26

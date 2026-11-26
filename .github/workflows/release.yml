@@ -1,8 +1,9 @@
 name: Release
 
-# Every v* tag becomes a release: universal build, Developer ID signed,
-# notarized, stapled DMG published as AltTab.dmg on the GitHub Release, then
-# the pinned Homebrew cask (yurifrl/homebrew-casks) is bumped to it.
+# Every v* tag becomes a release: a universal build, Developer ID signed and
+# notarized, published as AltTab.dmg plus a signed appcast.xml on the GitHub
+# Release, with the pinned Homebrew cask bumped to it. The step bodies live in
+# .github/actions/* so the nightly workflow runs the same pipeline.
 # The `latest` cask needs no bump: it points at releases/latest/download.
 on:
   push:
@@ -16,6 +17,11 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # Serialize releases; never cancel one mid-flight.
+  group: release
+  cancel-in-progress: false
+
 env:
   DEVELOPER_ID_APPLICATION: ${{ vars.DEVELOPER_ID_APPLICATION }}
   TAG: ${{ inputs.tag || github.ref_name }}
@@ -23,6 +29,7 @@ env:
 jobs:
   release:
     runs-on: macos-15
+    timeout-minutes: 45
     permissions:
       contents: write
     steps:
@@ -32,137 +39,66 @@ jobs:
           # Full history: release-notes.sh lists commits since the previous tag.
           fetch-depth: 0
 
-      - name: Signing gate and keychain setup
+      - name: Gate on release-only configuration
         env:
-          MACOS_SIGNING_P12_BASE64: ${{ secrets.MACOS_SIGNING_P12_BASE64 }}
-          MACOS_SIGNING_P12_PASSWORD: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
-          ASC_API_KEY_P8_BASE64: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           : "${DEVELOPER_ID_APPLICATION:?repo var DEVELOPER_ID_APPLICATION is required}"
-          : "${MACOS_SIGNING_P12_BASE64:?secret MACOS_SIGNING_P12_BASE64 is required}"
-          : "${MACOS_SIGNING_P12_PASSWORD:?secret MACOS_SIGNING_P12_PASSWORD is required}"
-          : "${ASC_API_KEY_P8_BASE64:?secret ASC_API_KEY_P8_BASE64 is required}"
-          : "${ASC_KEY_ID:?secret ASC_KEY_ID is required}"
-          : "${ASC_ISSUER_ID:?secret ASC_ISSUER_ID is required}"
           : "${HOMEBREW_TAP_TOKEN:?secret HOMEBREW_TAP_TOKEN is required - the pinned cask must be bumped}"
           : "${SPARKLE_ED_PRIVATE_KEY:?secret SPARKLE_ED_PRIVATE_KEY is required - the appcast must be signed}"
-          P12_PATH="$RUNNER_TEMP/signing.p12"
-          KEYCHAIN_PATH="$RUNNER_TEMP/release.keychain-db"
-          printf '%s' "$MACOS_SIGNING_P12_BASE64" | base64 --decode > "$P12_PATH"
-          security create-keychain -p "$MACOS_SIGNING_P12_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$MACOS_SIGNING_P12_PASSWORD" "$KEYCHAIN_PATH"
-          security import "$P12_PATH" -P "$MACOS_SIGNING_P12_PASSWORD" -t agg -k "$KEYCHAIN_PATH" \
-            -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: \
-            -k "$MACOS_SIGNING_P12_PASSWORD" "$KEYCHAIN_PATH"
-          security list-keychain -d user -s "$KEYCHAIN_PATH"
-          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
-          ASC_P8_PATH="$RUNNER_TEMP/asc-api-key.p8"
-          printf '%s' "$ASC_API_KEY_P8_BASE64" | base64 --decode > "$ASC_P8_PATH"
-          echo "ASC_P8_PATH=$ASC_P8_PATH" >> "$GITHUB_ENV"
-          echo "ASC_KEY_ID=$ASC_KEY_ID" >> "$GITHUB_ENV"
-          echo "ASC_ISSUER_ID=$ASC_ISSUER_ID" >> "$GITHUB_ENV"
 
-      - name: Derive version from tag
+      - name: Set up signing and notarization
+        id: signing
+        uses: ./.github/actions/setup-signing
+        with:
+          signing-identity: ${{ env.DEVELOPER_ID_APPLICATION }}
+          p12-base64: ${{ secrets.MACOS_SIGNING_P12_BASE64 }}
+          p12-password: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
+          asc-key-p8-base64: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
+          asc-key-id: ${{ secrets.ASC_KEY_ID }}
+          asc-issuer-id: ${{ secrets.ASC_ISSUER_ID }}
+
+      - name: Derive version and build number
+        id: meta
         run: |
           set -euo pipefail
           [[ "$TAG" =~ ^v[0-9] ]] || { echo "bad tag $TAG" >&2; exit 1; }
-          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          # UTC timestamp instead of the run number: it orders builds across the
+          # release and nightly workflows, whose counters are separate.
+          echo "build=$(date -u +%Y%m%d%H%M)" >> "$GITHUB_OUTPUT"
 
-      - name: Build universal binary
-        run: |
-          set -euo pipefail
-          swift build -c release --arch arm64 --arch x86_64
-          BIN="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/AltTabCore"
-          lipo -info "$BIN"
-          echo "BIN=$BIN" >> "$GITHUB_ENV"
-
-      - name: Assemble and sign AltTab.app
-        run: |
-          set -euo pipefail
-          APP="build/AltTab.app"
-          mkdir -p "$APP/Contents/MacOS"
-          cp "$BIN" "$APP/Contents/MacOS/AltTab"
-          cp Support/Info.plist "$APP/Contents/Info.plist"
-          mkdir -p "$APP/Contents/Resources"
-          cp Support/AppIcon.icns Support/MenuBarIconTemplate*.png "$APP/Contents/Resources/"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GITHUB_RUN_NUMBER" "$APP/Contents/Info.plist"
-          XC="$(find .build/artifacts -maxdepth 4 -name 'Sparkle.xcframework' -print -quit)"
-          [[ -n "$XC" ]] || { echo "Sparkle.xcframework missing — swift package resolve first" >&2; exit 1; }
-          mkdir -p "$APP/Contents/Frameworks"
-          rm -rf "$APP/Contents/Frameworks/Sparkle.framework"
-          cp -R "$XC/macos-arm64_x86_64/Sparkle.framework" "$APP/Contents/Frameworks/"
-          FW="$APP/Contents/Frameworks/Sparkle.framework"
-          codesign --force --timestamp --options runtime --preserve-metadata=entitlements \
-            --keychain "$KEYCHAIN_PATH" --sign "$DEVELOPER_ID_APPLICATION" \
-            "$FW/Versions/B/Autoupdate" \
-            "$FW/Versions/B/XPCServices/Downloader.xpc" \
-            "$FW/Versions/B/XPCServices/Installer.xpc" \
-            "$FW/Versions/B/Updater.app" \
-            "$FW"
-          codesign --verify --strict --verbose=2 "$FW"
-          codesign --force --timestamp --options runtime \
-            --keychain "$KEYCHAIN_PATH" --sign "$DEVELOPER_ID_APPLICATION" "$APP"
-          codesign --verify --deep --strict --verbose=2 "$APP"
+      - name: Build and sign AltTab.app
+        id: build
+        uses: ./.github/actions/build-app
+        with:
+          version: ${{ steps.meta.outputs.version }}
+          build-number: ${{ steps.meta.outputs.build }}
+          signing-identity: ${{ env.DEVELOPER_ID_APPLICATION }}
+          keychain-path: ${{ steps.signing.outputs.keychain-path }}
 
       - name: Notarize and staple the app
-        run: |
-          set -euo pipefail
-          APP="build/AltTab.app"
-          ditto -c -k --keepParent "$APP" build/AltTab-app.zip
-          LOG="$RUNNER_TEMP/notary-app.log"
-          set +e
-          xcrun notarytool submit build/AltTab-app.zip \
-            --key "$ASC_P8_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" --wait 2>&1 | tee "$LOG"
-          rc=${PIPESTATUS[0]}
-          set -e
-          if [[ $rc -ne 0 ]] || grep -qi 'status:[[:space:]]*Invalid' "$LOG"; then
-            SUB_ID="$(grep -Eo '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "$LOG" | head -1 || true)"
-            [[ -z "$SUB_ID" ]] || xcrun notarytool log "$SUB_ID" \
-              --key "$ASC_P8_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" || true
-            exit 1
-          fi
-          for attempt in 1 2 3; do
-            xcrun stapler staple "$APP" && break
-            [[ $attempt -lt 3 ]] || exit 1
-            sleep $((attempt * 15))
-          done
-          xcrun stapler validate "$APP"
-          spctl --assess --type execute -vv "$APP"
+        uses: ./.github/actions/notarize-app
+        with:
+          app-path: ${{ steps.build.outputs.app-path }}
+          asc-key-path: ${{ steps.signing.outputs.asc-key-path }}
+          asc-key-id: ${{ secrets.ASC_KEY_ID }}
+          asc-issuer-id: ${{ secrets.ASC_ISSUER_ID }}
 
-      - name: Create, sign and notarize the DMG
-        run: |
-          set -euo pipefail
-          PAYLOAD="$RUNNER_TEMP/dmg-payload"
-          mkdir -p "$PAYLOAD"
-          ditto build/AltTab.app "$PAYLOAD/AltTab.app"
-          ln -s /Applications "$PAYLOAD/Applications"
-          DMG="AltTab.dmg"
-          hdiutil create -volname "AltTab" -srcfolder "$PAYLOAD" -ov -format UDZO "$DMG"
-          codesign --force --timestamp --keychain "$KEYCHAIN_PATH" --sign "$DEVELOPER_ID_APPLICATION" "$DMG"
-          LOG="$RUNNER_TEMP/notary-dmg.log"
-          set +e
-          xcrun notarytool submit "$DMG" \
-            --key "$ASC_P8_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" --wait 2>&1 | tee "$LOG"
-          rc=${PIPESTATUS[0]}
-          set -e
-          if [[ $rc -ne 0 ]] || grep -qi 'status:[[:space:]]*Invalid' "$LOG"; then exit 1; fi
-          for attempt in 1 2 3; do
-            xcrun stapler staple "$DMG" && break
-            [[ $attempt -lt 3 ]] || exit 1
-            sleep $((attempt * 15))
-          done
-          xcrun stapler validate "$DMG"
-          SHA="$(shasum -a 256 "$DMG" | awk '{print $1}')"
-          echo "SHA256=$SHA" >> "$GITHUB_ENV"
-          echo "$SHA  $DMG"
+      - name: Package, sign and notarize the DMG
+        id: package
+        uses: ./.github/actions/package-dmg
+        with:
+          app-path: ${{ steps.build.outputs.app-path }}
+          dmg-name: AltTab.dmg
+          volname: AltTab
+          signing-identity: ${{ env.DEVELOPER_ID_APPLICATION }}
+          keychain-path: ${{ steps.signing.outputs.keychain-path }}
+          asc-key-path: ${{ steps.signing.outputs.asc-key-path }}
+          asc-key-id: ${{ secrets.ASC_KEY_ID }}
+          asc-issuer-id: ${{ secrets.ASC_ISSUER_ID }}
 
       - name: Assemble the release notes
         run: |
@@ -170,46 +106,35 @@ jobs:
           bash scripts/release-notes.sh "$TAG" "$TAG" RELEASE_NOTES.md
 
       - name: Generate the signed Sparkle appcast
-        env:
-          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          GEN="$(find .build/artifacts -maxdepth 4 -path '*/bin/generate_appcast' -print -quit)"
-          [[ -n "$GEN" ]] || { echo "generate_appcast missing - swift package resolve first" >&2; exit 1; }
-          STAGE="$RUNNER_TEMP/appcast"
-          mkdir -p "$STAGE"
-          cp AltTab.dmg "$STAGE/"
-          cp RELEASE_NOTES.md "$STAGE/AltTab.md"
-          # Key over stdin so it never exists as a file mid-job.
-          printf '%s' "$SPARKLE_ED_PRIVATE_KEY" | "$GEN" --ed-key-file - \
-            --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/$TAG/" \
-            --link "https://github.com/${GITHUB_REPOSITORY}" \
-            --embed-release-notes \
-            "$STAGE"
-          # Sparkle silently skips signing when the app in the archive has no
-          # SUPublicEDKey; unsigned feed items are rejected by every client, so
-          # fail the release instead of publishing a feed nobody can install.
-          grep -q 'sparkle:edSignature=' "$STAGE/appcast.xml" \
-            || { echo "appcast is not EdDSA-signed" >&2; exit 1; }
-          grep -q 'sparkle:format="markdown"' "$STAGE/appcast.xml" \
-            || { echo "release notes were not embedded in the appcast" >&2; exit 1; }
-          echo "APPCAST=$STAGE/appcast.xml" >> "$GITHUB_ENV"
+        id: appcast
+        uses: ./.github/actions/appcast
+        with:
+          dmg-path: ${{ steps.package.outputs.dmg-path }}
+          notes-name: AltTab
+          notes-path: RELEASE_NOTES.md
+          download-url-prefix: https://github.com/${{ github.repository }}/releases/download/${{ env.TAG }}/
+          sparkle-ed-key: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          APPCAST: ${{ steps.appcast.outputs.appcast-path }}
+          DMG: ${{ steps.package.outputs.dmg-path }}
+          TITLE: AltTab ${{ steps.meta.outputs.version }}
         run: |
           set -euo pipefail
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release edit "$TAG" --notes-file RELEASE_NOTES.md
-            gh release upload "$TAG" AltTab.dmg "$APPCAST" --clobber
+            gh release upload "$TAG" "$DMG" "$APPCAST" --clobber
           else
-            gh release create "$TAG" AltTab.dmg "$APPCAST" --verify-tag --notes-file RELEASE_NOTES.md --title "AltTab $VERSION"
+            gh release create "$TAG" "$DMG" "$APPCAST" --verify-tag --notes-file RELEASE_NOTES.md --title "$TITLE"
           fi
 
       - name: Bump pinned Homebrew cask
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          SHA256: ${{ steps.package.outputs.sha256 }}
         run: |
           set -euo pipefail
           : "${TAP_TOKEN:?secret HOMEBREW_TAP_TOKEN is required - the pinned cask must be bumped}"
@@ -225,6 +150,8 @@ jobs:
           git push origin HEAD
 
       - name: Stamp the released section in CHANGELOG.md
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
           set -euo pipefail
           if grep -q "^## \[$VERSION\]" CHANGELOG.md; then
@@ -247,3 +174,9 @@ jobs:
           git add CHANGELOG.md
           git commit -m "docs(changelog): stamp $TAG"
           git push origin main
+
+      - name: Remove the temporary keychain
+        if: always()
+        run: |
+          [[ -n "${KEYCHAIN_PATH:-}" ]] || exit 0
+          security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true

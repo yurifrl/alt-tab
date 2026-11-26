@@ -51,6 +51,7 @@ enum PrefsStore {
         static let appsOf = "at.panel.appsOf"        // all | active
         static let typingStartsFastSearch = "at.panel.typingStartsFastSearch"
         static let showRowIndicator = "at.panel.rowIndicator"
+        static let updateChannel = "at.updates.channel"
         static let actionCloseWinMods = "at.action.closeWindowFlags"
         static let actionQuitMods = "at.action.quitFlags"
         static let actionMinimizeMods = "at.action.minimizeFlags"
@@ -64,6 +65,16 @@ enum PrefsStore {
     static var theme: Theme {
         get { Theme(rawValue: d.string(forKey: Key.theme) ?? "") ?? .vibrantDark }
         set { d.set(newValue.rawValue, forKey: Key.theme) }
+    }
+
+    /// Sparkle update channel. `stable` (default) sees numbered releases only;
+    /// `nightly` also sees rolling builds tracked by the nightly workflow.
+    /// Read by Updater on every manual check, so a change applies immediately.
+    enum UpdateChannel: String, CaseIterable { case stable, nightly }
+
+    static var updateChannel: UpdateChannel {
+        get { UpdateChannel(rawValue: d.string(forKey: Key.updateChannel) ?? "") ?? .stable }
+        set { d.set(newValue.rawValue, forKey: Key.updateChannel) }
     }
 
     static var maxRows: Int {

@@ -1,0 +1,84 @@
+name: Generate the signed Sparkle appcast
+description: >-
+  Merge one update item into the live feed and sign it. The existing appcast is
+  fetched from the public releases/latest/download URL, so numbered releases and
+  the rolling nightly item coexist: untagged items are the default channel,
+  the nightly item carries sparkle:channel=nightly, and a same-named archive
+  replaces its previous item instead of duplicating it.
+
+inputs:
+  dmg-path:
+    description: Path of the signed, stapled DMG to publish.
+    required: true
+  notes-name:
+    description: Archive base name for the notes file (AltTab -> AltTab.md).
+    required: true
+  notes-path:
+    description: Markdown release notes to embed in the item.
+    required: true
+  download-url-prefix:
+    description: URL prefix for the enclosure link (release download URL).
+    required: true
+  channel:
+    description: sparkle:channel tag for the item (empty = default channel).
+    required: false
+    default: ""
+  sparkle-ed-key:
+    description: EdDSA private key that signs the feed.
+    required: true
+
+outputs:
+  appcast-path:
+    description: Path of the signed appcast.xml.
+    value: ${{ steps.appcast.outputs.appcast-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Generate and verify
+      id: appcast
+      shell: bash
+      env:
+        DMG_PATH: ${{ inputs.dmg-path }}
+        NOTES_NAME: ${{ inputs.notes-name }}
+        NOTES_PATH: ${{ inputs.notes-path }}
+        URL_PREFIX: ${{ inputs.download-url-prefix }}
+        CHANNEL: ${{ inputs.channel }}
+        SPARKLE_ED_KEY: ${{ inputs.sparkle-ed-key }}
+      run: |
+        set -euo pipefail
+        GEN="$(find .build/artifacts -maxdepth 4 -path '*/bin/generate_appcast' -print -quit)"
+        [[ -n "$GEN" ]] || { echo "generate_appcast missing - swift package resolve first" >&2; exit 1; }
+        STAGE="$RUNNER_TEMP/appcast"
+        rm -rf "$STAGE"
+        mkdir -p "$STAGE"
+        cp "$DMG_PATH" "$STAGE/"
+        cp "$NOTES_PATH" "$STAGE/$NOTES_NAME.md"
+        EXISTING_URL="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/appcast.xml"
+        if curl -fsSL -o "$STAGE/appcast.xml" "$EXISTING_URL"; then
+          echo "merging into the live feed"
+        else
+          echo "no live feed at $EXISTING_URL (first publish?)"
+          rm -f "$STAGE/appcast.xml"
+        fi
+        if [[ -n "$CHANNEL" ]]; then
+          CHANNEL_ARGS="--channel $CHANNEL"
+        else
+          CHANNEL_ARGS=""
+        fi
+        # Key over stdin so it never exists as a file mid-job.
+        printf '%s' "$SPARKLE_ED_KEY" | "$GEN" --ed-key-file - \
+          --download-url-prefix "$URL_PREFIX" \
+          --link "https://github.com/${GITHUB_REPOSITORY}" \
+          --embed-release-notes \
+          --maximum-versions 100 \
+          $CHANNEL_ARGS \
+          "$STAGE"
+        # Sparkle silently skips signing when the app in the archive has no
+        # SUPublicEDKey; unsigned feed items are rejected by every client, so
+        # fail instead of publishing a feed nobody can install.
+        grep -q 'sparkle:edSignature=' "$STAGE/appcast.xml" \
+          || { echo "appcast is not EdDSA-signed" >&2; exit 1; }
+        grep -q 'sparkle:format="markdown"' "$STAGE/appcast.xml" \
+          || { echo "release notes were not embedded in the appcast" >&2; exit 1; }
+        echo "appcast-path=$STAGE/appcast.xml" >> "$GITHUB_OUTPUT"

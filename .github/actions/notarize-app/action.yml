@@ -1,0 +1,51 @@
+name: Notarize and staple the app
+description: >-
+  Zip the signed bundle, submit it to the Apple notary service, surface the
+  notary log on failure, then staple and assess the ticket.
+
+inputs:
+  app-path:
+    description: Path of the signed .app bundle.
+    required: true
+  asc-key-path:
+    description: App Store Connect API key (.p8) for notarytool.
+    required: true
+  asc-key-id:
+    description: App Store Connect API key ID.
+    required: true
+  asc-issuer-id:
+    description: App Store Connect API issuer ID.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Notarize and staple
+      shell: bash
+      env:
+        APP: ${{ inputs.app-path }}
+        ASC_P8_PATH: ${{ inputs.asc-key-path }}
+        ASC_KEY_ID: ${{ inputs.asc-key-id }}
+        ASC_ISSUER_ID: ${{ inputs.asc-issuer-id }}
+      run: |
+        set -euo pipefail
+        ditto -c -k --keepParent "$APP" build/AltTab-app.zip
+        LOG="$RUNNER_TEMP/notary-app.log"
+        set +e
+        xcrun notarytool submit build/AltTab-app.zip \
+          --key "$ASC_P8_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" --wait 2>&1 | tee "$LOG"
+        rc=${PIPESTATUS[0]}
+        set -e
+        if [[ $rc -ne 0 ]] || grep -qi 'status:[[:space:]]*Invalid' "$LOG"; then
+          SUB_ID="$(grep -Eo '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "$LOG" | head -1 || true)"
+          [[ -z "$SUB_ID" ]] || xcrun notarytool log "$SUB_ID" \
+            --key "$ASC_P8_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" || true
+          exit 1
+        fi
+        for attempt in 1 2 3; do
+          xcrun stapler staple "$APP" && break
+          [[ $attempt -lt 3 ]] || exit 1
+          sleep $((attempt * 15))
+        done
+        xcrun stapler validate "$APP"
+        spctl --assess --type execute -vv "$APP"

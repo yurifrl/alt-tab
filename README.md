@@ -16,9 +16,12 @@ brew install --cask yurifrl-alt-tab
 
 # or: always the newest GitHub release, whatever the tap's pinned version says
 brew install --cask yurifrl-alt-tab@latest
+
+# or: rolling builds from main (pre-release; see Nightly builds below)
+brew install --cask yurifrl-alt-tab@nightly
 ```
 
-The two casks install the same `AltTab.app`, so they conflict; pick one.
+The three casks install the same `AltTab.app`, so they conflict; pick one.
 
 Then launch AltTab and grant it **Accessibility** access when prompted
 (System Settings → Privacy & Security → Accessibility).
@@ -27,9 +30,23 @@ Then launch AltTab and grant it **Accessibility** access when prompted
 
 ```bash
 brew update && brew upgrade --cask yurifrl-alt-tab
-# the @latest cask is unversioned, so Homebrew needs --greedy to refresh it:
+# the @latest and @nightly casks are unversioned, so Homebrew needs --greedy:
 brew upgrade --cask --greedy yurifrl-alt-tab@latest
+brew upgrade --cask --greedy yurifrl-alt-tab@nightly
 ```
+
+### Nightly builds
+
+A rolling pre-release named `nightly` tracks the tip of `main` (rebuilt on a
+daily schedule, plus manual runs). It is never `latest`: `releases/latest`, the
+stable update feed and the stable casks always resolve to the newest numbered
+release.
+
+To follow it, set **Preferences → General → Update channel → Nightly** — the
+same switcher, but "Check for Updates…" then also offers nightly builds. The
+channel is independent of how the app was installed: the `@nightly` cask and
+the in-app setting are two ways to opt in. Switching back to Stable keeps the
+installed build until a newer numbered release exists.
 
 ### Manual download
 
