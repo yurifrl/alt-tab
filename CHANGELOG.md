@@ -19,6 +19,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the push fails the commit stays local and the failure is logged and
   notified — so a closed session can't leave its work out of the next release
   notes.
+- Window rules can be generic: "+" adds a rule not tied to an app or a window,
+  where the title conditions alone (none = every window) decide what it
+  applies to — so one rule can hide, alias or color matching windows across
+  apps.
+- Repeating a select letter walks its matches: pressing the same letter again
+  in the switcher moves the selection to the next window whose name starts
+  with it, down the list and without wrapping; when no match is left below,
+  the press goes back to typing as before. A lone match, a different letter,
+  other keys and key auto-repeat follow the unchanged path.
+- The select-letter behavior is written down and checked: the rules SL-1…SL-12
+  in `.planning/specs/001-select-letter-walk/` and `swift run AltTabCore spec`
+  verify the implementation against them — per-rule acceptance checks, a
+  reference-model differential fuzzer and a mutation scoreboard, non-zero exit
+  on any divergence.
 
 ### Changed
 
