@@ -15,8 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `add-feature` skill records each session's changes into `CHANGELOG.md`, and
   the release workflow stamps them into each versioned release.
 - Recording happens without asking: a session-end hook runs the `add-feature`
-  skill headless, commits the new `[Unreleased]` entry, and pushes it, so a
-  closed session can't leave its work out of the next release notes.
+  skill headless, then commits the new `[Unreleased]` entry and pushes it — if
+  the push fails the commit stays local and the failure is logged and
+  notified — so a closed session can't leave its work out of the next release
+  notes.
 
 ### Changed
 

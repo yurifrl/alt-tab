@@ -1,6 +1,7 @@
 // Session-end changelog recorder — spawns a detached headless omp run that
 // records what the closing TUI session built (the `add-feature` skill in its
-// headless mode), commits it, and pushes.
+// headless mode). The model only writes text; the wrapper this hook spawns
+// commits CHANGELOG.md and pushes it, and says so loudly when either fails.
 //
 // Fire-and-forget by design: session_shutdown handlers share a 2-second
 // budget, so this hook starts the recorder and returns immediately — it never
@@ -24,6 +25,10 @@ const MIN_SESSION_BYTES = 8_000;
 /// Wall-clock cap for the recorder run.
 const RECORDER_MAX_TIME = "15m";
 const GUARD_ENV = "OMP_ADD_FEATURE_RECORDER";
+/// The closing session's own executable, passed to the wrapper: `command -v
+/// omp` in the detached child resolved to a different, older build (18.2.5)
+/// than the session that just closed (19.2.1).
+export const RECORDER_BIN_ENV = "OMP_ADD_FEATURE_RECORDER_BIN";
 const LOG_DIR = `${process.env.HOME ?? "/tmp"}/.omp/logs/add-feature-recorder`;
 
 type BunLike = {
@@ -117,11 +122,35 @@ export function hasLiveSibling(sessionFile: string): boolean {
   }
 }
 
+/// The title a session gave itself (`{"type":"title","v":1,"title":"…"}` as
+/// its first record), stripped of the leading icon glyph — a deterministic,
+/// informative commit subject that costs no model trust. Exported as a test
+/// seam.
+export function sessionTitle(path: string): string | undefined {
+  try {
+    const fd = openSync(path, "r");
+    try {
+      const head = Buffer.alloc(4096);
+      const read = readSync(fd, head, 0, head.length, 0);
+      const match = /"type":"title","v":1,"title":"((?:[^"\\]|\\.)*)"/.exec(head.subarray(0, read).toString("utf8"));
+      if (!match) return undefined;
+      const title = JSON.parse(`"${match[1]}"`) as string;
+      const plain = title.replace(/^[^\p{L}\p{N}]+/u, "").trim();
+      return plain || undefined;
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return undefined;
+  }
+}
+
 function recorderPrompt(sessionFile: string): string {
   return [
     "You are the session-end changelog recorder for this repository. A TUI",
     "session just closed; a hook spawned this headless run to record what it",
-    "built.",
+    "built. You write text; the hook owns git and will commit and push",
+    "CHANGELOG.md itself — never run git, never stage, never commit.",
     "",
     `Transcript (JSONL): ${sessionFile}`,
     "",
@@ -132,27 +161,66 @@ function recorderPrompt(sessionFile: string): string {
     "   read the raw file (it can be many megabytes).",
     "3. If the session delivered nothing a user of this project could notice,",
     "   write nothing and finish.",
-    "4. If the skill wrote an entry, commit ONLY CHANGELOG.md through the",
-    "   commit namespace: draft, d.only([\"CHANGELOG.md\"]), commit with",
-    "   subject \"docs(changelog): <short outcome>\". Never git add / git",
-    "   commit from the shell.",
-    "5. Push: `git push origin HEAD`. If rejected, `git pull --rebase",
-    "   --autostash` once and push again; if it still fails, keep the commit.",
-    "6. End with exactly one status line:",
-    "   RECORDED <sha> | NOTHING-TO-RECORD | COMMITTED-LOCAL <sha> | FAILED: <reason>",
+    "4. Otherwise edit CHANGELOG.md only: add the entry under `[Unreleased]` in",
+    "   the skill's format. Touch no other file.",
+    "5. End with exactly one line: ENTRY-WRITTEN or NOTHING-TO-RECORD. That",
+    "   line is advisory; the hook decides from git whether to commit.",
   ].join("\n");
 }
 
-function recorderCommand(repoDir: string, sessionFile: string, sessionId: string): string {
+/// The hook's own wrapper commits and pushes — the model only writes text.
+/// Delegating git to the model failed in practice: the `commit` eval namespace
+/// is absent when an extension fails to load, one run reported a sha for a
+/// commit that never existed, and a run that gave up left the entry
+/// uncommitted. The contract: if CHANGELOG.md changed, it is committed; a
+/// failed push keeps the commit and both failures are loud (log status line,
+/// FAILURES.log, desktop notification). The runtime is pinned to the closing
+/// session's own binary; `command -v omp` is only the fallback. Exported as a
+/// test seam.
+export function recorderCommand(repoDir: string, sessionFile: string, sessionId: string): string {
   const log = `${LOG_DIR}/${new Date().toISOString().replaceAll(":", "-")}_${sessionId.slice(0, 8)}.log`;
+  const failures = `${LOG_DIR}/FAILURES.log`;
+  const title = sessionTitle(sessionFile);
+  const subject = `docs(changelog): ${(title ?? `session ${sessionId.slice(0, 8)}`).slice(0, 72)}`;
   return [
     `export ${GUARD_ENV}=1`,
     `mkdir -p ${shellQuote(LOG_DIR)}`,
-    `exec "$(command -v omp || printf '%s' "$HOME/Library/Application Support/Tern/omp/bin/omp")" \\`,
+    `log=${shellQuote(log)}`,
+    `cd ${shellQuote(repoDir)} || { printf '%s\\n' "FAILED: cannot cd ${repoDir}" >>${shellQuote(failures)}; exit 1; }`,
+    `git rev-parse --git-dir >/dev/null 2>&1 || { printf '%s\\n' "FAILED: $PWD is not a git work tree" >>${shellQuote(failures)}; exit 1; }`,
+    `fail_loud() {`,
+    `  printf '%s\\n' "$1" >>"$log"`,
+    `  printf '%s\\t%s\\t%s\\n' "$(date -u +%FT%TZ)" "$1" "${'$2'}" >>${shellQuote(failures)}`,
+    `  osascript -e "display notification \\"$2\\" with title \\"changelog recorder\\"" >/dev/null 2>&1 || true`,
+    `}`,
+    `omp_bin="\${${RECORDER_BIN_ENV}:-}"`,
+    `[ -n "$omp_bin" ] && [ -x "$omp_bin" ] || omp_bin=$(command -v omp || printf '%s' "$HOME/Library/Application Support/Tern/omp/bin/omp")`,
+    `"$omp_bin" \\`,
     `  -p ${shellQuote(recorderPrompt(sessionFile))} \\`,
     `  --cwd ${shellQuote(repoDir)} --no-session --no-lsp --no-title \\`,
     `  --approval-mode yolo --max-time ${RECORDER_MAX_TIME} \\`,
-    `  > ${shellQuote(log)} 2>&1`,
+    `  >>"$log" 2>&1`,
+    `rc=$?`,
+    `if [ -n "$(git status --porcelain -- CHANGELOG.md)" ]; then`,
+    `  if ! git add -- CHANGELOG.md >>"$log" 2>&1; then`,
+    `    fail_loud "FAILED: git add CHANGELOG.md failed (recorder exit $rc)" "commit failed: git add"; exit 1`,
+    `  fi`,
+    `  if ! git commit -m ${shellQuote(subject)} -- CHANGELOG.md >>"$log" 2>&1; then`,
+    `    fail_loud "FAILED: git commit failed (recorder exit $rc)" "commit failed: git commit"; exit 1`,
+    `  fi`,
+    `  sha=$(git rev-parse HEAD)`,
+    `  if ! git push origin HEAD >>"$log" 2>&1; then`,
+    `    git pull --rebase --autostash >>"$log" 2>&1 || true`,
+    `    if ! git push origin HEAD >>"$log" 2>&1; then`,
+    `      fail_loud "COMMITTED-LOCAL $sha (push failed)" "push failed — commit kept locally: ${'${sha:0:12}'}"; exit 1`,
+    `    fi`,
+    `  fi`,
+    `  printf '%s\\n' "RECORDED $sha" >>"$log"`,
+    `elif [ "$rc" -ne 0 ]; then`,
+    `  fail_loud "FAILED: recorder exited $rc with no CHANGELOG.md change" "recorder failed (exit $rc)"; exit 1`,
+    `else`,
+    `  printf '%s\\n' "NOTHING-TO-RECORD" >>"$log"`,
+    `fi`,
   ].join("\n");
 }
 
@@ -196,6 +264,7 @@ export default function (pi: HookAPI): void {
         stdin: "ignore",
         stdout: "ignore",
         stderr: "ignore",
+        env: { ...process.env, [RECORDER_BIN_ENV]: process.execPath },
       });
       child?.unref?.();
       spawned = true;
