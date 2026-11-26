@@ -16,9 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the release workflow stamps them into each versioned release.
 - Recording happens without asking: a session-end hook runs the `add-feature`
   skill headless, then commits the new `[Unreleased]` entry and pushes it — if
-  the push fails the commit stays local and the failure is logged and
-  notified — so a closed session can't leave its work out of the next release
-  notes.
+  the push fails the commit stays local and the failure is logged — so a
+  closed session can't leave its work out of the next release notes. The
+  commit is marked `chore(changelog):` and the release notes skip it.
 - Window rules can be generic: "+" adds a rule not tied to an app or a window,
   where the title conditions alone (none = every window) decide what it
   applies to — so one rule can hide, alias or color matching windows across
