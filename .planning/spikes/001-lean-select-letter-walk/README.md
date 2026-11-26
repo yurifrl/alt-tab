@@ -14,7 +14,7 @@ tags: [lean, formal-verification, tla+, select-letter-walk]
 ## What This Validates
 
 Given the walk's core rules (`SL-2`, `SL-3`, `SL-10` in
-[SELECT-LETTER-SPEC.md](../../../SELECT-LETTER-SPEC.md)), when modeled as a Lean 4
+[spec 001](../../specs/001-select-letter-walk/README.md)), when modeled as a Lean 4
 state machine, then `Walk.lean` compiles with both theorems proved and `#print axioms`
 reports no `sorryAx`.
 
@@ -32,7 +32,7 @@ artifact rather than an opinion.
 Choices: Lean for the artifact (zero-dependency install, statements instead of traces);
 TLA+ stays the right tool when a *system's* interleavings are the question. The walk's
 state space is tiny, so its enumeration happens in the app's `spec` run mode instead
-(SELECT-LETTER-SPEC.md §5) — the two approaches are complementary, not competing.
+(spec 001 §5) — the two approaches are complementary, not competing.
 
 ## How to Run
 
@@ -110,5 +110,5 @@ Findings:
   only verifies its own model. That part stays with spec review and the independent
   validator.
 - The model is not wired to the app. If a rule changes, `Walk.lean`,
-  `SELECT-LETTER-SPEC.md` and the `spec` mode must be updated together (the model cites
+  `spec 001` and the `spec` mode must be updated together (the model cites
   SL ids).

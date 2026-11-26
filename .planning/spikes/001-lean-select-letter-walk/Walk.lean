@@ -1,5 +1,5 @@
 /-
-  Select-letter walk (see SELECT-LETTER-SPEC.md, rules SL-2/SL-3/SL-10) modeled as
+  Select-letter walk (see ../../specs/001-select-letter-walk/README.md, rules SL-2/SL-3/SL-10) modeled as
   a Lean 4 state machine.
 
   state: letters — the displayed rows' select letters, in displayed order — and
