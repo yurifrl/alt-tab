@@ -6,6 +6,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Updates show what changed: the in-app update window and the GitHub release
+  carry the same release notes — a curated summary plus the commit list since
+  the previous release.
+- Release notes are curated where the work happens: the project-scoped
+  `add-feature` skill records each session's changes into `CHANGELOG.md`, and
+  the release workflow stamps them into each versioned release.
+- Recording happens without asking: a session-end hook runs the `add-feature`
+  skill headless, commits the new `[Unreleased]` entry, and pushes it, so a
+  closed session can't leave its work out of the next release notes.
+
+### Changed
+
+- Check for Updates… now lives only in Preferences → General — removed from the
+  status menu along with the app-name header and the non-functional ⌘, / ⌘Q
+  shortcut labels.
+
 ## [0.2.2] - 2026-11-26
 
 ### Added
