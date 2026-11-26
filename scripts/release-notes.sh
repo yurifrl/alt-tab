@@ -68,6 +68,10 @@ emit() { if [[ -n "$OUT" ]]; then cat >"$OUT"; else cat; fi; }
       for (i = 1; i <= n; i++) canon[names[i]] = 1
     }
     {
+      # Bookkeeping commits never appear here: chore(changelog): … is the
+      # marker written by the session-end changelog recorder, and
+      # docs(changelog): … is the release workflow stamping a version.
+      if ($2 ~ /^(chore|docs)\(changelog\)!?: /) next
       sha = $1; t = "Other"; subj = $2
       if ($2 ~ /^[a-z]+(\([^)]*\))?!?: /) {
         typ = $2; sub(/[(:!].*/, "", typ)
