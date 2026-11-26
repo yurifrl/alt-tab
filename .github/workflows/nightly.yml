@@ -10,6 +10,11 @@ name: Nightly
 # appcast step merges that one item into the live feed. Clients that never
 # opted into the channel (including every pre-channel build) ignore tagged
 # items entirely, so no migration is needed.
+#
+# Scheduled runs first diff main against the tip the last successful nightly
+# built. CHANGELOG stamps, README/docs, skill and plan commits produce no binary,
+# so a day that only touched those publishes nothing. Manual dispatch always
+# builds.
 on:
   schedule:
     - cron: '0 6 * * *'
@@ -27,7 +32,68 @@ env:
   DEVELOPER_ID_APPLICATION: ${{ vars.DEVELOPER_ID_APPLICATION }}
 
 jobs:
+  # Cheap gate in front of the 45-minute signed build: decide whether main
+  # changed anything that can alter the produced app.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      relevant: ${{ steps.diff.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so the last built tip is always an ancestor to diff against.
+          fetch-depth: 0
+
+      - name: Decide whether main changed anything build-relevant
+        id: diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" != "schedule" ]]; then
+            echo "Manual dispatch: building unconditionally."
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Tip of the last successful nightly. Skipped and failed runs don't
+          # count, so commits after the last real build stay candidates.
+          last="$(gh run list --workflow nightly.yml --branch main --status success --limit 1 --json headSha --jq '.[0].headSha // empty')"
+          if [[ -z "$last" ]]; then
+            echo "No successful nightly run yet; building."
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! git merge-base --is-ancestor "$last" HEAD 2>/dev/null; then
+            echo "Last nightly ${last:0:8} is not an ancestor of HEAD (force push?); building."
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed="$(git diff --name-only "$last"..HEAD)"
+          # Docs, changelog stamps, and agent/planning tooling never change the
+          # app bundle. Everything else (Sources, assets, packaging, workflows)
+          # does, and defaults to relevant so new paths are covered.
+          relevant="$(printf '%s\n' "$changed" \
+            | grep -vE '^(CHANGELOG\.md|README\.md|BLUEPRINT\.md|\.agents/|\.omp/|\.planning/|\.claude/)' || true)"
+          if [[ -z "$changed" ]]; then
+            echo "main is at ${last:0:8}, the last built tip; nothing new."
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+          elif [[ -z "$relevant" ]]; then
+            echo "Only docs/changelog changed since ${last:0:8}:"
+            printf '%s\n' "$changed"
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Build-relevant changes since ${last:0:8}:"
+            printf '%s\n' "$relevant"
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          fi
+
   nightly:
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: macos-15
     timeout-minutes: 45
     permissions:
