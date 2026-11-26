@@ -51,6 +51,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Every setting lives in `~/.config/alt-tab/config.yaml`: one readable file,
+  laid out like the Preferences panes, that the app loads at launch and writes
+  back as you change things. The old preferences are imported once, on first
+  launch, and never read again. Edit the file while the app is not running — a
+  file it cannot read or validate stops it with the path, line and problem, and
+  a Reveal in Finder button; `swift run AltTabCore config` prints what the app
+  will load and `ALT_TAB_CONFIG` points both at another file.
 - Check for Updates… now lives only in Preferences → General — removed from the
   status menu along with the app-name header and the non-functional ⌘, / ⌘Q
   shortcut labels.

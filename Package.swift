@@ -8,12 +8,14 @@ let package = Package(
         // Updater engine. The framework is embedded into AltTab.app by
         // make-app.sh / the release workflow, and staged next to the binary
         // for unpackaged runs by scripts/stage-sparkle.sh.
-        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.10.1")
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.10.1"),
+        // YAML parser/emitter for ~/.config/alt-tab/config.yaml.
+        .package(url: "https://github.com/jpsim/Yams", from: "6.0.0")
     ],
     targets: [
         .executableTarget(
             name: "AltTabCore",
-            dependencies: [.product(name: "Sparkle", package: "Sparkle")],
+            dependencies: [.product(name: "Sparkle", package: "Sparkle"), "Yams"],
             path: "Sources/AltTabCore",
             linkerSettings: [
                 .unsafeFlags(["-weak_framework", "MultitouchSupport", "-F", "/System/Library/PrivateFrameworks"]),

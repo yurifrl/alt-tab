@@ -761,6 +761,19 @@ let agentLockURL = FileManager.default.homeDirectoryForCurrentUser
 func runAgent() {
     guard acquireAgentLock(at: agentLockURL) else { exit(0) }
     setvbuf(stdout, nil, _IOLBF, 0)   // line-buffered: agent logs interleave with stderr
+
+    // Settings first: the updater channel, the shortcuts and every menu read
+    // them, and a broken file must stop the app before any of that runs.
+    do {
+        try ConfigStore.load()
+    } catch let error as ConfigError {
+        ConfigFatalAlert.present(error)
+        exit(1)
+    } catch {
+        FileHandle.standardError.write(Data("\(error)\n".utf8))
+        exit(1)
+    }
+
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)   // status-bar agent, no dock icon
 
@@ -796,8 +809,6 @@ func runAgent() {
         item.button?.title = "⇥"
     }
     item.menu = menu
-
-    PrefsStore.migrateShortcuts()
 
     // Never exit for missing permission: install the hotkey when trusted,
     // otherwise show the system prompt once and poll until granted (or
@@ -839,11 +850,57 @@ final class ReopenDelegate: NSObject, NSApplicationDelegate {
     @objc func quit() { NSApplication.shared.terminate(nil) }
 }
 
-let windows = enumerateWindows()
 // No argument → the real product: the always-on agent (app bundles launch bare).
 let mode = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "run"
+
+// Demo modes are development surfaces: each run points at its own throwaway
+// file, so it can never read or rewrite the user's real settings. `run` and
+// `config` see the real path (or whatever ALT_TAB_CONFIG names).
+if mode != "run", mode != "config",
+   ProcessInfo.processInfo.environment["ALT_TAB_CONFIG"] == nil {
+    setenv("ALT_TAB_CONFIG", NSTemporaryDirectory() + "alt-tab-\(mode)-\(getpid()).yaml", 1)
+}
+
+// The debounced save would be lost on a bare exit; quitting still writes.
+atexit { ConfigStore.flush() }
+
+/// CLI modes have no window to alert in: the file's one sentence goes to
+/// stderr and the process stops.
+func exitForBrokenConfig(_ error: Error) -> Never {
+    FileHandle.standardError.write(Data("\(error)\n".utf8))
+    exit(1)
+}
+
+/// Resolved path, then one line per section: what the app will read, without
+/// opening the file.
+func runConfigMode() {
+    let url = ConfigStore.file
+    print("config: \(url.path)")
+    do { try ConfigStore.load() } catch { exitForBrokenConfig(error) }
+    let v = ConfigStore.values
+    print("version: \(v.version)")
+    print("appearance: theme \(v.appearance.theme.rawValue)")
+    print("panel: maxRows \(v.panel.maxRows), width \(v.panel.width), "
+          + "display \(v.panel.display.rawValue), showDelay \(v.panel.showDelay), "
+          + "activeDisplayOnly \(v.panel.activeDisplayOnly), hoverSelects \(v.panel.hoverSelects), "
+          + "scrollSelects \(v.panel.scrollSelects), ignoreMouse \(v.panel.ignoreMouse), "
+          + "rowIndicator \(v.panel.rowIndicator.rawValue), "
+          + "typingStartsFastSearch \(v.panel.typingStartsFastSearch)")
+    print("shortcuts: \(v.shortcuts.count) rows, \(v.shortcuts.filter(\.on).count) enabled")
+    print("search: shortcutsDepth \(v.search.shortcutsDepth), allowMismatch \(v.search.allowMismatch)")
+    print("workspaces: spaceScope \(v.workspaces.spaceScope.rawValue), "
+          + "appsOf \(v.workspaces.appsOfAll ? "all" : "active"), "
+          + "orderByRecency \(v.workspaces.orderByRecency), showIgnored \(v.workspaces.showIgnored), "
+          + "minimized \(v.workspaces.minimized.rawValue), hidden \(v.workspaces.hidden.rawValue), "
+          + "windowless \(v.workspaces.windowless.rawValue), grouping \(v.workspaces.grouping.rawValue), "
+          + "groupCount \(v.workspaces.groupCount)")
+    print("rules: \(v.rules.count)")
+    print("updates: channel \(v.updates.channel.rawValue)")
+}
+
 switch mode {
-case "enum":     printTable(windows)
+case "config":   runConfigMode()
+case "enum":     printTable(enumerateWindows())
 case "activate": runActivationDemo()
 case "hotkey":   runHotkeyDemo()
 case "panel":    runPanelDemo()
@@ -854,6 +911,6 @@ case "extras":   runExtrasDemo()
 case "spec":     runSpecDemo()
 case "run":      runAgent()
 default:
-    print("usage: AltTabCore [enum|activate|hotkey|panel|track|prefs|extras|spec|run]")
+    print("usage: AltTabCore [enum|activate|hotkey|panel|track|prefs|prefs-ui|extras|spec|config|run]")
     exit(2)
 }
