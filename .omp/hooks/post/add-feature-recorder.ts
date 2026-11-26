@@ -159,12 +159,34 @@ function recorderPrompt(sessionFile: string): string {
     "   invocation is the confirmation, and there is no user to ask.",
     "2. Digest the transcript with that section's extraction commands; never",
     "   read the raw file (it can be many megabytes).",
-    "3. If the session delivered nothing a user of this project could notice,",
-    "   write nothing and finish.",
-    "4. Otherwise edit CHANGELOG.md only: add the entry under `[Unreleased]` in",
-    "   the skill's format. Touch no other file.",
-    "5. End with exactly one line: ENTRY-WRITTEN or NOTHING-TO-RECORD. That",
-    "   line is advisory; the hook decides from git whether to commit.",
+    "3. Judge only the CHANGELOG.md in this worktree, read now. Earlier",
+    "   recorder logs (~/.omp/logs), commit messages and remembered context are",
+    "   NOT evidence: if this session's user-visible outcome is not written in",
+    "   CHANGELOG.md as it is right now, it is not recorded.",
+    "4. If it is not recorded, edit CHANGELOG.md only: add the entry under",
+    "   `[Unreleased]` in the skill's format. Touch no other file. End with",
+    "   exactly one line: ENTRY-WRITTEN.",
+    "5. If the session delivered nothing a user of this project could notice,",
+    "   end with exactly one line: NO-USER-VISIBLE-WORK.",
+    "6. Never assert the work is already recorded without proof: to do that,",
+    "   end with `NOTHING-TO-RECORD | <one line copied verbatim from the",
+    "   current CHANGELOG.md that covers this session's work>`. The hook checks",
+    "   that line exists and repeats the run when it does not.",
+  ].join("\n");
+}
+
+/// Second pass after an unverified NOTHING-TO-RECORD: the model claimed the
+/// work was already recorded and quoted nothing that exists in CHANGELOG.md.
+function recorderRetryPrompt(sessionFile: string): string {
+  return [
+    recorderPrompt(sessionFile),
+    "",
+    "RETRY: the previous attempt ended with NOTHING-TO-RECORD and its quoted",
+    "CHANGELOG.md line does not exist there, so that claim was false. Re-audit",
+    "the transcript and act: if this session's user-visible outcome is missing",
+    "from CHANGELOG.md, add it now (edit CHANGELOG.md only) and end with",
+    "ENTRY-WRITTEN; if the session truly has no user-visible outcome, end with",
+    "NO-USER-VISIBLE-WORK.",
   ].join("\n");
 }
 
@@ -173,54 +195,82 @@ function recorderPrompt(sessionFile: string): string {
 /// is absent when an extension fails to load, one run reported a sha for a
 /// commit that never existed, and a run that gave up left the entry
 /// uncommitted. The contract: if CHANGELOG.md changed, it is committed; a
-/// failed push keeps the commit and both failures are loud (log status line,
-/// FAILURES.log, desktop notification). The runtime is pinned to the closing
-/// session's own binary; `command -v omp` is only the fallback. Exported as a
-/// test seam.
+/// failed push keeps the commit; a failure is loud in two places — the run's
+/// log (START/END lines) and FAILURES.log — and never on the terminal. The
+/// runtime is pinned to the closing session's own binary; `command -v omp` is
+/// only the fallback. Exported as a test seam.
 export function recorderCommand(repoDir: string, sessionFile: string, sessionId: string): string {
-  const log = `${LOG_DIR}/${new Date().toISOString().replaceAll(":", "-")}_${sessionId.slice(0, 8)}.log`;
+  const stamp = new Date().toISOString().replaceAll(":", "-");
+  const log = `${LOG_DIR}/${sessionId}_${stamp}.log`;
+  const lock = `${LOG_DIR}/${sessionId}.lock`;
   const failures = `${LOG_DIR}/FAILURES.log`;
   const title = sessionTitle(sessionFile);
-  const subject = `docs(changelog): ${(title ?? `session ${sessionId.slice(0, 8)}`).slice(0, 72)}`;
+  // `chore(changelog)` is the bookkeeping marker: release-notes.sh skips it,
+  // so recording a session never shows up as a commit in the release notes.
+  const subject = `chore(changelog): ${(title ?? `session ${sessionId.slice(0, 8)}`).slice(0, 72)}`;
+  // Everything goes to the log file; the wrapper never writes to the terminal.
   return [
     `export ${GUARD_ENV}=1`,
     `mkdir -p ${shellQuote(LOG_DIR)}`,
     `log=${shellQuote(log)}`,
-    `cd ${shellQuote(repoDir)} || { printf '%s\\n' "FAILED: cannot cd ${repoDir}" >>${shellQuote(failures)}; exit 1; }`,
-    `git rev-parse --git-dir >/dev/null 2>&1 || { printf '%s\\n' "FAILED: $PWD is not a git work tree" >>${shellQuote(failures)}; exit 1; }`,
-    `fail_loud() {`,
-    `  printf '%s\\n' "$1" >>"$log"`,
-    `  printf '%s\\t%s\\t%s\\n' "$(date -u +%FT%TZ)" "$1" "${'$2'}" >>${shellQuote(failures)}`,
-    `  osascript -e "display notification \\"$2\\" with title \\"changelog recorder\\"" >/dev/null 2>&1 || true`,
-    `}`,
+    `failures=${shellQuote(failures)}`,
+    `ln -sf "$log" ${shellQuote(`${LOG_DIR}/latest.log`)}`,
+    `now() { date -u +%FT%TZ; }`,
+    `status() { printf '%s\\t%s\\n' "$(now)" "$1" >>"$log"; }`,
+    `fail() { t=$(now); printf '%s\\tFAILED: %s\\n' "$t" "$1" >>"$log"; printf '%s\\tFAILED: %s\\n' "$t" "$1" >>"$failures"; printf '%s\\tEND FAILED\\n' "$t" >>"$log"; exit 1; }`,
+    `lock=${shellQuote(lock)}`,
+    `if ! mkdir "$lock" 2>/dev/null; then`,
+    `  [ -n "$(find "$lock" -maxdepth 0 -mmin +30 2>/dev/null)" ] && rmdir "$lock" 2>/dev/null`,
+    `  mkdir "$lock" 2>/dev/null || { status "SKIP: another recorder holds $lock"; exit 0; }`,
+    `fi`,
+    `trap 'rmdir "$lock" 2>/dev/null' EXIT`,
+    `cd ${shellQuote(repoDir)} || fail "cannot cd ${repoDir}"`,
+    `git rev-parse --git-dir >/dev/null 2>&1 || fail "$PWD is not a git work tree"`,
     `omp_bin="\${${RECORDER_BIN_ENV}:-}"`,
     `[ -n "$omp_bin" ] && [ -x "$omp_bin" ] || omp_bin=$(command -v omp || printf '%s' "$HOME/Library/Application Support/Tern/omp/bin/omp")`,
-    `"$omp_bin" \\`,
-    `  -p ${shellQuote(recorderPrompt(sessionFile))} \\`,
-    `  --cwd ${shellQuote(repoDir)} --no-session --no-lsp --no-title \\`,
-    `  --approval-mode yolo --max-time ${RECORDER_MAX_TIME} \\`,
-    `  >>"$log" 2>&1`,
-    `rc=$?`,
-    `if [ -n "$(git status --porcelain -- CHANGELOG.md)" ]; then`,
-    `  if ! git add -- CHANGELOG.md >>"$log" 2>&1; then`,
-    `    fail_loud "FAILED: git add CHANGELOG.md failed (recorder exit $rc)" "commit failed: git add"; exit 1`,
-    `  fi`,
-    `  if ! git commit -m ${shellQuote(subject)} -- CHANGELOG.md >>"$log" 2>&1; then`,
-    `    fail_loud "FAILED: git commit failed (recorder exit $rc)" "commit failed: git commit"; exit 1`,
-    `  fi`,
-    `  sha=$(git rev-parse HEAD)`,
-    `  if ! git push origin HEAD >>"$log" 2>&1; then`,
-    `    git pull --rebase --autostash >>"$log" 2>&1 || true`,
+    `status "START session ${sessionId} bin $omp_bin"`,
+    `prompt=${shellQuote(recorderPrompt(sessionFile))}`,
+    `retry=${shellQuote(recorderRetryPrompt(sessionFile))}`,
+    `attempt=0`,
+    `while [ "$attempt" -lt 2 ]; do`,
+    `  attempt=$((attempt + 1))`,
+    `  if [ "$attempt" -eq 1 ]; then p=$prompt; else p=$retry; status "RETRY: previous verdict was not backed by CHANGELOG.md"; fi`,
+    `  off=$(wc -c <"$log" | tr -d ' ')`,
+    `  "$omp_bin" \\`,
+    `    -p "$p" \\`,
+    `    --cwd ${shellQuote(repoDir)} --no-session --no-lsp --no-title \\`,
+    `    --approval-mode yolo --max-time ${RECORDER_MAX_TIME} \\`,
+    `    >>"$log" 2>&1`,
+    `  rc=$?`,
+    `  if [ -n "$(git status --porcelain -- CHANGELOG.md)" ]; then`,
+    `    git add -- CHANGELOG.md >>"$log" 2>&1 || fail "git add CHANGELOG.md failed (recorder exit $rc)"`,
+    `    git commit -m ${shellQuote(subject)} -- CHANGELOG.md >>"$log" 2>&1 || fail "git commit failed (recorder exit $rc)"`,
+    `    sha=$(git rev-parse HEAD)`,
     `    if ! git push origin HEAD >>"$log" 2>&1; then`,
-    `      fail_loud "COMMITTED-LOCAL $sha (push failed)" "push failed — commit kept locally: ${'${sha:0:12}'}"; exit 1`,
+    `      git pull --rebase --autostash >>"$log" 2>&1 || true`,
+    `      git push origin HEAD >>"$log" 2>&1 || { t=$(now); m="COMMITTED-LOCAL $sha (push failed)"; printf '%s\\t%s\\n' "$t" "$m" >>"$log"; printf '%s\\t%s\\n' "$t" "$m" >>"$failures"; printf '%s\\tEND FAILED (push)\\n' "$t" >>"$log"; exit 1; }`,
     `    fi`,
+    `    status "RECORDED $sha"; status "END OK"; exit 0`,
     `  fi`,
-    `  printf '%s\\n' "RECORDED $sha" >>"$log"`,
-    `elif [ "$rc" -ne 0 ]; then`,
-    `  fail_loud "FAILED: recorder exited $rc with no CHANGELOG.md change" "recorder failed (exit $rc)"; exit 1`,
-    `else`,
-    `  printf '%s\\n' "NOTHING-TO-RECORD" >>"$log"`,
-    `fi`,
+    `  [ "$rc" -ne 0 ] && fail "recorder exited $rc with no CHANGELOG.md change"`,
+    `  out=$(tail -c +$((off + 1)) "$log")`,
+    `  verdict=$(printf '%s\\n' "$out" | grep -o 'NOTHING-TO-RECORD *|.*' | tail -1)`,
+    `  if [ -z "$verdict" ] && printf '%s\\n' "$out" | grep -q 'NO-USER-VISIBLE-WORK'; then verdict=NO-USER-VISIBLE-WORK; fi`,
+    `  if [ "$verdict" = "NO-USER-VISIBLE-WORK" ]; then`,
+    `    status "NOTHING-TO-RECORD (nothing user-visible)"; status "END OK"; exit 0`,
+    `  fi`,
+    `  case "$verdict" in`,
+    `    NOTHING-TO-RECORD*)`,
+    `      quote=${'${verdict#*|}'}`,
+    `      quote=$(printf '%s' "$quote" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')`,
+    `      if [ -n "$quote" ] && grep -Fq -- "$quote" CHANGELOG.md; then`,
+    `        status "NOTHING-TO-RECORD (already recorded: $quote)"; status "END OK"; exit 0`,
+    `      fi`,
+    `      status "UNVERIFIED NOTHING-TO-RECORD: the quoted line is not in CHANGELOG.md" ;;`,
+    `    *) status "no verdict line in the recorder output" ;;`,
+    `  esac`,
+    `done`,
+    `fail "recorder ran twice without recording or backing its verdict"`,
   ].join("\n");
 }
 
