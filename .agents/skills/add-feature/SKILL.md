@@ -20,6 +20,27 @@ If the session produced nothing a user of the project could notice, say so inste
 
 Never call the harness `changelog_update` tool — its `## <date> <title>` format is not this grammar and the release parser will skip those entries.
 
+## Headless mode (session-end recorder)
+
+`.omp/hooks/post/add-feature-recorder.ts` spawns `omp -p` when a TUI session closes and passes this skill a transcript path. In that run:
+
+- There is no user: never ask, never wait for confirmation — the hook invocation is the confirmation. Step 4 of the Procedure is replaced by this.
+- The source is the transcript file the hook names, and it can be many megabytes. Never read it raw; extract a bounded digest (these recipes are tested):
+
+  ```bash
+  F=<transcript path>
+  # Intent — everything the user asked for in the session
+  jq -r 'select(.type=="message" and .message.role=="user") | [.message.content[]? | select(.type=="text") | .text] | join(" ")' "$F" | head -c 12000
+  # Actions — which tools ran (edit/write > 0 means the session shipped code)
+  jq -r 'select(.type=="message" and .message.role=="assistant") | .message.content[]? | select(.type=="toolCall") | .name' "$F" | sort | uniq -c | sort -rn
+  # Outcome — what it reported when done
+  jq -r 'select(.type=="message" and .message.role=="assistant") | [.message.content[]? | select(.type=="text") | .text] | join(" ")' "$F" | tail -c 12000
+  ```
+
+- If the session delivered nothing a user of the project could notice (pure questions, reading, planning), write nothing and finish with `NOTHING-TO-RECORD`. Otherwise write the entry and finish with `WRITTEN`.
+- Git stays off-limits here too — the recorder prompt commits (`commit` namespace, `CHANGELOG.md` only) and pushes after this skill returns. Never `git add` / `git commit` / `git push` from this skill.
+- Logs: `~/.omp/logs/add-feature-recorder/`.
+
 ## Format
 
 ```markdown
