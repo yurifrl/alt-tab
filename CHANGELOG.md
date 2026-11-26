@@ -33,6 +33,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   verify the implementation against them — per-rule acceptance checks, a
   reference-model differential fuzzer and a mutation scoreboard, non-zero exit
   on any divergence.
+- Window rules match on more than the title: each condition picks an attribute
+  (Title, Window ID, App name, Bundle ID, PID) and a comparison its type allows
+  — Contains, Exact, Starts with, Ends with and Regex for text, Is and Is not
+  for the numeric IDs — so a rule can target one Chrome instance by PID or an
+  app by bundle id without depending on titles that change with the tab. Rules
+  saved before the change keep matching as one title condition.
+- "More details" under the rule's Match list shows every open window and the
+  values a condition can be built from: Title, Window ID, App and PID, with the
+  bundle id on each row's sub-line. Windows the rule already matches are tinted
+  green with a ✓, values a condition uses are tinted accent, and clicking a
+  value fills the focused condition (numeric attributes land as "Is"). The
+  table collapses to a count line, scrolls at a fixed height, and long titles
+  slide into view on hover with the full text as a tooltip.
 
 ### Changed
 
