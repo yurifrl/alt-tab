@@ -634,32 +634,20 @@ func runAgent() {
     let reopenDelegate = ReopenDelegate()
     app.delegate = reopenDelegate
     objc_setAssociatedObject(app, "reopenDelegate", reopenDelegate, .OBJC_ASSOCIATION_RETAIN)
-    let updaterAvailable = Updater.shared.start()
+    _ = Updater.shared.start()
     let menu = NSMenu()
-    let title = NSMenuItem(title: "alt-tab — running", action: nil, keyEquivalent: "")
-    title.isEnabled = false
-    menu.addItem(title)
-    menu.addItem(.separator())
     let openItem = NSMenuItem(title: "Open Switcher Now",
                               action: #selector(AgentActions.openSwitcher), keyEquivalent: "")
     openItem.target = actions
     menu.addItem(openItem)
-    // Omitted when unpackaged (`swift run` demos), where Sparkle has no bundle.
-    if updaterAvailable {
-        let updatesItem = NSMenuItem(title: "Check for Updates…",
-                                     action: #selector(Updater.checkForUpdates),
-                                     keyEquivalent: "")
-        updatesItem.target = Updater.shared
-        menu.addItem(updatesItem)
-    }
     let prefsItem = NSMenuItem(title: "Preferences…",
                                action: #selector(AgentActions.showPrefs),
-                               keyEquivalent: ",")
+                               keyEquivalent: "")
     prefsItem.target = actions
     menu.addItem(prefsItem)
     menu.addItem(.separator())
     let quitItem = NSMenuItem(title: "Quit alt-tab",
-                              action: #selector(AgentActions.quit), keyEquivalent: "q")
+                              action: #selector(AgentActions.quit), keyEquivalent: "")
     quitItem.target = actions
     menu.addItem(quitItem)
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
