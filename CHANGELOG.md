@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Check for Updates… now lives only in Preferences → General — removed from the
   status menu along with the app-name header and the non-functional ⌘, / ⌘Q
   shortcut labels.
+- Switcher rows show each app's icon in the identity slot again, with the select
+  letter confined to the left hint gutter instead of replacing the icon.
 
 ## [0.2.2] - 2026-11-26
 
