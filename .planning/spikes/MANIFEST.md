@@ -8,7 +8,7 @@ class), and what that workflow actually looks like here in practice. Trigger: Bo
 Cherny's Lean + TLA+ verification of the Claude Agent SDK (2026-09) — how far does the
 "a couple of prompts" story compress today's formal-methods workflow? Explored
 2026-11-25 with a live Lean 4 toolchain in a sandbox, modeling the select-letter walk
-(`SELECT-LETTER-SPEC.md`).
+(`../specs/001-select-letter-walk/README.md`).
 
 **Requirements:**
 - Spike artifacts are knowledge, not product: nothing here wires into `Package.swift`,
